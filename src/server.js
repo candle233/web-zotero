@@ -237,6 +237,10 @@ async function handleApi(request, response, url) {
     return sendJson(response, 200, await offlineLibrary.save(pdf.itemKey || decodeURIComponent(itemKey), pdf.key, pdf.filePath));
   }
 
+  if (pathname === '/api/offline') {
+    return sendJson(response, 200, { offline: await offlineLibrary.listDetailed() });
+  }
+
   if (/^\/api\/items\/[^/]+\/progress$/.test(pathname)) {
     const itemKey = decodeURIComponent(pathname.split('/')[3]);
     if (request.method === 'GET') return sendJson(response, 200, webStore.getProgress(itemKey));

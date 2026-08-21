@@ -7,9 +7,12 @@ A lightweight, remotely accessible web companion for an existing local Zotero 7 
 - Responsive library for desktop and mobile, with collection filtering and metadata browsing.
 - Range-supported PDF streaming and browser-native PDF reading.
 - Zotero full-text cache indexing and phrase search across available PDFs.
-- Per-item web notes and reading progress stored separately in `data/web-data.sqlite`.
+- Per-item web notes, reading progress, and offline PDF copies stored separately under `data/`.
 - Local extractive AI reading, with optional OpenAI fallback/upgrade via `OPENAI_API_KEY`.
 - Desktop plug-in inventory endpoint and compatibility guidance for installed XPIs.
+- Citation export in APA and BibTeX, metadata export in CSV and JSON.
+- Desktop annotations browsing plus Markdown/CSV export.
+- Lexical related-paper recommendations and service health reporting.
 
 ## Requirements
 
