@@ -16,6 +16,7 @@ const { installedDesktopPlugins } = require('./plugins');
 const { exportCsv, exportFormats, exportJson } = require('./citation');
 const { HealthMonitor } = require('./health');
 const { annotationsToCsv, annotationsToMarkdown } = require('./annotation-export');
+const { recommend } = require('./recommend');
 
 const PORT = Number(process.env.PORT || 8420);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -219,6 +220,12 @@ async function handleApi(request, response, url) {
       'cache-control': 'no-store'
     });
     return response.end(body);
+  }
+
+  if (/^\/api\/items\/[^/]+\/related$/.test(pathname) && request.method === 'GET') {
+    await zoteroDatabase.refreshItems();
+    const key = decodeURIComponent(pathname.split('/')[3]);
+    return sendJson(response, 200, { related: recommend(zoteroDatabase.items, key, 10) });
   }
 
   if (/^\/api\/items\/[^/]+\/progress$/.test(pathname)) {

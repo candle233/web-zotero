@@ -285,6 +285,32 @@ function renderDetail(item) {
     card.append(panel);
   }
 
+  const relatedPanel = document.createElement('section');
+  relatedPanel.className = 'panel';
+  relatedPanel.innerHTML = '<h3>Related papers</h3><div class="muted">Loading…</div>';
+  card.append(relatedPanel);
+  request(`/api/items/${encodeURIComponent(item.key)}/related`).then(data => {
+    relatedPanel.innerHTML = '<h3>Related papers</h3>';
+    if (!data.related.length) {
+      relatedPanel.innerHTML += '<div class="muted">No lexical matches yet.</div>';
+      return;
+    }
+    for (const related of data.related) {
+      const button = document.createElement('button');
+      button.className = 'item';
+      button.innerHTML = '';
+      const title = document.createElement('div');
+      title.className = 'item-title';
+      title.textContent = related.title;
+      const meta = document.createElement('div');
+      meta.className = 'item-meta';
+      meta.textContent = related.creators.join(', ') || related.itemType;
+      button.append(title, meta);
+      button.addEventListener('click', () => openItem(related.key));
+      relatedPanel.append(button);
+    }
+  }).catch(error => { relatedPanel.innerHTML = '<h3>Related papers</h3>'; relatedPanel.append(Object.assign(document.createElement('div'), { className: 'muted', textContent: error.message })); });
+
   elements.detailBody.append(card);
 }
 
