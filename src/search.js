@@ -15,6 +15,10 @@ class SearchIndex {
         item_key UNINDEXED, attachment_key UNINDEXED, title, authors, text,
         tokenize = 'unicode61 remove_diacritics 2'
       );
+      CREATE TABLE IF NOT EXISTS index_state (
+        item_key TEXT PRIMARY KEY,
+        indexed_at TEXT NOT NULL
+      );
     `);
     this.indexing = false;
   }
@@ -26,7 +30,7 @@ class SearchIndex {
     try {
       const items = await this.zoteroDatabase.refreshItems();
       const candidates = items.filter(item => item.pdfCount > 0).slice(0, limit);
-      const existing = new Set(this.database.prepare('SELECT DISTINCT item_key FROM documents').all().map(row => row.item_key));
+      const existing = new Map(this.database.prepare('SELECT item_key, indexed_at FROM index_state').all().map(row => [row.item_key, row.indexed_at]));
       let indexed = 0;
       let skipped = 0;
       for (const item of candidates) {
@@ -45,6 +49,11 @@ class SearchIndex {
           this.database.prepare('DELETE FROM documents WHERE item_key = ?').run(item.key);
           this.database.prepare('INSERT INTO documents(item_key, attachment_key, title, authors, text) VALUES (?, ?, ?, ?, ?)')
             .run(item.key, attachment.key, item.title, item.creators.join(' '), text.slice(0, 900000));
+          const indexedAt = new Date().toISOString();
+          this.database.prepare(`
+            INSERT INTO index_state(item_key, indexed_at) VALUES (?, ?)
+            ON CONFLICT(item_key) DO UPDATE SET indexed_at = excluded.indexed_at
+          `).run(item.key, indexedAt);
           indexed += 1;
         } catch {
           skipped += 1;

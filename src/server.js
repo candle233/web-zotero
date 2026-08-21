@@ -14,6 +14,7 @@ const { WebStore } = require('./web-store');
 const { localSummary, openAiSummary } = require('./local-ai');
 const { installedDesktopPlugins } = require('./plugins');
 const { exportCsv, exportFormats, exportJson } = require('./citation');
+const { HealthMonitor } = require('./health');
 
 const PORT = Number(process.env.PORT || 8420);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -37,6 +38,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const zoteroDatabase = new ZoteroDatabase();
 const searchIndex = new SearchIndex(DATA_DIR, zoteroDatabase);
 const webStore = new WebStore(DATA_DIR);
+const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore });
 
 function sendJson(response, status, payload) {
   const body = JSON.stringify(payload);
@@ -274,6 +276,8 @@ async function handleApi(request, response, url) {
     if (!WEB_PASSWORD || body.password !== WEB_PASSWORD) return sendJson(response, 401, { error: 'Invalid password', auth: true });
     return sendJson(response, 200, { ok: true });
   }
+
+  if (pathname === '/api/health') return sendJson(response, 200, health.status());
 
   return sendJson(response, 404, { error: 'API route not found' });
 }
