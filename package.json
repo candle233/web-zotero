@@ -1,0 +1,17 @@
+{
+  "name": "web-zotero",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Remote web companion for a local Zotero library",
+  "main": "src/server.js",
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}
