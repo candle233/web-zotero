@@ -164,7 +164,7 @@ class ZoteroDatabase {
     const resolved = path.resolve(this.storagePath, target.key, target.fileName);
     const allowedRoot = path.resolve(this.storagePath, target.key);
     if (!resolved.startsWith(allowedRoot + path.sep)) return null;
-    return { ...target, filePath: resolved, textCachePath: path.join(allowedRoot, '.zotero-ft-cache') };
+    return { ...target, itemKey, filePath: resolved, textCachePath: path.join(allowedRoot, '.zotero-ft-cache') };
   }
 
   close() {

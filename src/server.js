@@ -17,6 +17,7 @@ const { exportCsv, exportFormats, exportJson } = require('./citation');
 const { HealthMonitor } = require('./health');
 const { annotationsToCsv, annotationsToMarkdown } = require('./annotation-export');
 const { recommend } = require('./recommend');
+const { OfflineLibrary } = require('./offline');
 
 const PORT = Number(process.env.PORT || 8420);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -41,6 +42,7 @@ const zoteroDatabase = new ZoteroDatabase();
 const searchIndex = new SearchIndex(DATA_DIR, zoteroDatabase);
 const webStore = new WebStore(DATA_DIR);
 const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore });
+const offlineLibrary = new OfflineLibrary(DATA_DIR);
 
 function sendJson(response, status, payload) {
   const body = JSON.stringify(payload);
@@ -226,6 +228,13 @@ async function handleApi(request, response, url) {
     await zoteroDatabase.refreshItems();
     const key = decodeURIComponent(pathname.split('/')[3]);
     return sendJson(response, 200, { related: recommend(zoteroDatabase.items, key, 10) });
+  }
+
+  if (/^\/api\/items\/[^/]+\/files\/[^/]+\/offline$/.test(pathname) && request.method === 'POST') {
+    const [, , , itemKey, , attachmentKey] = pathname.split('/');
+    const pdf = zoteroDatabase.resolvePdf(decodeURIComponent(itemKey), decodeURIComponent(attachmentKey));
+    if (!pdf) return sendJson(response, 404, { error: 'PDF not found' });
+    return sendJson(response, 200, await offlineLibrary.save(pdf.itemKey || decodeURIComponent(itemKey), pdf.key, pdf.filePath));
   }
 
   if (/^\/api\/items\/[^/]+\/progress$/.test(pathname)) {
