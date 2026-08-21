@@ -20,6 +20,10 @@ class ZoteroDatabase {
     const rows = this.database.prepare(`
       SELECT i.itemID, i.key, i.dateAdded, i.dateModified,
              t.typeName,
+             (SELECT COUNT(*) FROM itemNotes n
+              JOIN items ni ON ni.itemID = n.itemID
+              LEFT JOIN deletedItems nd ON nd.itemID = ni.itemID
+              WHERE n.parentItemID = i.itemID AND nd.itemID IS NULL) AS noteCount,
              (SELECT value FROM itemData d
               JOIN itemDataValues v ON v.valueID = d.valueID
               JOIN fieldsCombined f ON f.fieldID = d.fieldID
@@ -65,6 +69,7 @@ class ZoteroDatabase {
       itemType: row.typeName,
       creators: creators.get(row.itemID) || [],
       pdfCount: attachments.get(row.itemID) || 0,
+      noteCount: row.noteCount || 0,
       dateAdded: row.dateAdded,
       dateModified: row.dateModified
     }));

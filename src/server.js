@@ -13,6 +13,7 @@ const { SearchIndex } = require('./search');
 const { WebStore } = require('./web-store');
 const { localSummary, openAiSummary } = require('./local-ai');
 const { installedDesktopPlugins } = require('./plugins');
+const { exportCsv, exportFormats, exportJson } = require('./citation');
 
 const PORT = Number(process.env.PORT || 8420);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -156,6 +157,26 @@ async function handleApi(request, response, url) {
     return detail ? sendJson(response, 200, detail) : sendJson(response, 404, { error: 'Item not found' });
   }
 
+  if (/^\/api\/items\/[^/]+\/export\.(json|csv|bib|txt)$/.test(pathname) && request.method === 'GET') {
+    const match = pathname.match(/^\/api\/items\/([^/]+)\/export\.(json|csv|bib|txt)$/);
+    const detail = zoteroDatabase.itemDetail(decodeURIComponent(match[1]));
+    if (!detail) return sendJson(response, 404, { error: 'Item not found' });
+    let body;
+    let type;
+    let filename;
+    if (match[2] === 'bib') { body = exportFormats(detail).bibtex; type = 'application/x-bibtex; charset=utf-8'; filename = `${detail.key}.bib`; }
+    else if (match[2] === 'csv') { body = exportCsv(detail); type = 'text/csv; charset=utf-8'; filename = `${detail.key}.csv`; }
+    else if (match[2] === 'json') { body = exportJson(detail); type = 'application/json; charset=utf-8'; filename = `${detail.key}.json`; }
+    else { body = exportFormats(detail).apa; type = 'text/plain; charset=utf-8'; filename = `${detail.key}.txt`; }
+    response.writeHead(200, {
+      'content-type': type,
+      'content-disposition': `attachment; filename="${filename}"`,
+      'x-content-type-options': 'nosniff',
+      'cache-control': 'no-store'
+    });
+    return response.end(body);
+  }
+
   if (/^\/api\/items\/[^/]+\/files\/[^/]+$/.test(pathname) && request.method === 'GET') {
     const [, , , itemKey, , attachmentKey] = pathname.split('/');
     return servePdf(request, response, decodeURIComponent(itemKey), decodeURIComponent(attachmentKey));
@@ -171,6 +192,11 @@ async function handleApi(request, response, url) {
     if (request.method === 'GET') return sendJson(response, 200, webStore.getNote(itemKey));
     const body = await readJson(request);
     return sendJson(response, 200, webStore.saveNote(itemKey, String(body.content || '').slice(0, 200000)));
+  }
+
+  if (/^\/api\/items\/[^/]+\/desktop-notes$/.test(pathname) && request.method === 'GET') {
+    const detail = zoteroDatabase.itemDetail(decodeURIComponent(pathname.split('/')[3]));
+    return detail ? sendJson(response, 200, { notes: detail.notes }) : sendJson(response, 404, { error: 'Item not found' });
   }
 
   if (/^\/api\/items\/[^/]+\/progress$/.test(pathname)) {

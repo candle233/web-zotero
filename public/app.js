@@ -126,6 +126,34 @@ function metaCard(label, value) {
   return card;
 }
 
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function exportItem(item, format) {
+  try {
+    const response = await fetch(`/api/items/${encodeURIComponent(item.key)}/export.${format}`, { headers: authHeaders() });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    downloadText(`${item.key}.${format}`, await response.text());
+    showToast(`Exported ${format.toUpperCase()}`);
+  } catch (error) { setStatus(error.message, true); }
+}
+
+function actionButton(label, onClick, className = 'ghost') {
+  const button = document.createElement('button');
+  button.className = className;
+  button.textContent = label;
+  button.style.marginBottom = '7px';
+  button.addEventListener('click', onClick);
+  return button;
+}
+
 function renderDetail(item) {
   elements.detailTitle.textContent = item.title;
   elements.detailBody.innerHTML = '';
@@ -145,6 +173,17 @@ function renderDetail(item) {
     metaCard('Zotero key', item.key)
   );
   card.append(authors, grid);
+
+  const exportPanel = document.createElement('section');
+  exportPanel.className = 'panel';
+  exportPanel.innerHTML = '<h3>Export</h3>';
+  exportPanel.append(
+    actionButton('APA citation', () => exportItem(item, 'txt')),
+    actionButton('BibTeX', () => exportItem(item, 'bib')),
+    actionButton('CSV metadata', () => exportItem(item, 'csv')),
+    actionButton('JSON metadata', () => exportItem(item, 'json'))
+  );
+  card.append(exportPanel);
 
   if (item.tags.length) {
     const panel = document.createElement('section');
