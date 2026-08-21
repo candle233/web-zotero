@@ -15,6 +15,7 @@ const { localSummary, openAiSummary } = require('./local-ai');
 const { installedDesktopPlugins } = require('./plugins');
 const { exportCsv, exportFormats, exportJson } = require('./citation');
 const { HealthMonitor } = require('./health');
+const { annotationsToCsv, annotationsToMarkdown } = require('./annotation-export');
 
 const PORT = Number(process.env.PORT || 8420);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -199,6 +200,25 @@ async function handleApi(request, response, url) {
   if (/^\/api\/items\/[^/]+\/desktop-notes$/.test(pathname) && request.method === 'GET') {
     const detail = zoteroDatabase.itemDetail(decodeURIComponent(pathname.split('/')[3]));
     return detail ? sendJson(response, 200, { notes: detail.notes }) : sendJson(response, 404, { error: 'Item not found' });
+  }
+
+  if (/^\/api\/items\/[^/]+\/annotations$/.test(pathname) && request.method === 'GET') {
+    const itemKey = decodeURIComponent(pathname.split('/')[3]);
+    const detail = zoteroDatabase.itemDetail(itemKey);
+    if (!detail) return sendJson(response, 404, { error: 'Item not found' });
+    const format = url.searchParams.get('format') === 'csv' ? 'csv' : 'md';
+    const annotations = zoteroDatabase.database.prepare(`
+      SELECT type, text, comment, color, pageLabel, authorName
+      FROM itemAnnotations WHERE parentItemID = ? ORDER BY sortIndex
+    `).all(detail.id);
+    const body = format === 'csv' ? annotationsToCsv(annotations) : annotationsToMarkdown(annotations);
+    response.writeHead(200, {
+      'content-type': format === 'csv' ? 'text/csv; charset=utf-8' : 'text/markdown; charset=utf-8',
+      'content-disposition': `attachment; filename="${itemKey}-annotations.${format}"`,
+      'x-content-type-options': 'nosniff',
+      'cache-control': 'no-store'
+    });
+    return response.end(body);
   }
 
   if (/^\/api\/items\/[^/]+\/progress$/.test(pathname)) {

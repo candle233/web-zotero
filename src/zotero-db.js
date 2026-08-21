@@ -118,7 +118,11 @@ class ZoteroDatabase {
       ORDER BY datetime(i.dateModified) DESC
     `).all(summary.id);
     const attachments = this.attachmentsFor(summary.id);
-    return { ...summary, fields, creators, tags, collections, notes, attachments };
+    const annotations = this.database.prepare(`
+      SELECT type, text, comment, color, pageLabel, authorName
+      FROM itemAnnotations WHERE parentItemID = ? ORDER BY sortIndex
+    `).all(summary.id);
+    return { ...summary, fields, creators, tags, collections, notes, annotations, attachments };
   }
 
   attachmentsFor(itemId) {

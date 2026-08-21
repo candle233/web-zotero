@@ -138,9 +138,13 @@ function downloadText(filename, text) {
 
 async function exportItem(item, format) {
   try {
-    const response = await fetch(`/api/items/${encodeURIComponent(item.key)}/export.${format}`, { headers: authHeaders() });
+    const endpoint = format === 'annotations'
+      ? `/api/items/${encodeURIComponent(item.key)}/annotations?format=md`
+      : `/api/items/${encodeURIComponent(item.key)}/export.${format}`;
+    const response = await fetch(endpoint, { headers: authHeaders() });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-    downloadText(`${item.key}.${format}`, await response.text());
+    const extension = format === 'annotations' ? 'md' : format;
+    downloadText(`${item.key}.${extension}`, await response.text());
     showToast(`Exported ${format.toUpperCase()}`);
   } catch (error) { setStatus(error.message, true); }
 }
@@ -238,6 +242,26 @@ function renderDetail(item) {
       div.append(sanitizeZoteroNoteHtml(note.note));
       panel.append(div);
     }
+    card.append(panel);
+  }
+
+  if (item.annotations?.length) {
+    const panel = document.createElement('section');
+    panel.className = 'panel';
+    panel.innerHTML = `<h3>Desktop annotations (${item.annotations.length})</h3>`;
+    for (const annotation of item.annotations.slice(0, 20)) {
+      const div = document.createElement('div');
+      div.className = 'annotation';
+      div.style.borderLeftColor = annotation.color || '#6aa5ff';
+      const text = document.createElement('div');
+      text.textContent = annotation.text || '(no highlighted text)';
+      const meta = document.createElement('div');
+      meta.className = 'muted';
+      meta.textContent = [annotation.pageLabel ? `Page ${annotation.pageLabel}` : '', annotation.comment].filter(Boolean).join(' · ');
+      div.append(text, meta);
+      panel.append(div);
+    }
+    panel.append(actionButton('Export annotations', () => exportItem(item, 'annotations')));
     card.append(panel);
   }
 
