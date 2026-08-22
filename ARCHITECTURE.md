@@ -117,6 +117,8 @@ Web Zotero 是本地 Zotero 文献库的远程网页伴侣系统：在电脑与�
 | POST | `/api/annotations` | `{itemKey, attachmentKey, pageIndex, rects, color?, comment?, quote?}` → 归一化坐标校验/夹取后落库，作者=当前用户 |
 | PATCH/DELETE | `/api/annotations/:id` | 作者或 owner 可改颜色/备注、可删除；他人 403 |
 | GET/POST | `/api/items/:key/notes` | POST 新增 `{html}` 富文本载荷：服务端白名单净化（`src/notes-html.js`）后存 `content_html`，同时维护纯文本列 |
+| GET | `/api/search?q=&mode=lexical\|semantic\|hybrid&limit=` | R8a：混合检索（FTS bm25 + LSA 余弦，归一化后 0.45/0.55 加权），语义索引未就绪时回退 lexical；响应含 `semantic` 状态 |
+| POST | `/api/ai/ask` `{itemKey?, question}` | R8a：RAG 问答 → `{provider, question, answer, passages[]}`；LSA+词面混合检索 top-4 段落，OpenAI 可用时生成式作答（带 [n] 引用），否则本地抽取式句子排序作答 |
 
 角色门禁：`owner > editor > viewer`；viewer 仅读（含只读 POST：metadata/resolve、citations/format、ai/summarize），写操作 403；用户管理仅 owner。
 
@@ -137,7 +139,8 @@ Web Zotero 是本地 Zotero 文献库的远程网页伴侣系统：在电脑与�
 | R6 | 规格化交付（本轮） | 架构蓝图、PostgreSQL Schema、PDF.js 归一化批注组件、DOI/arXiv/BibTeX 元数据管线 + citeproc-js 引文服务 | ✅ |
 | R7a 协作基础（本轮） | 多用户 + 富文本 + 批注持久化（零依赖 SQLite 形态） | users/sessions/角色（scrypt + 令牌哈希）、`/api/users` 管理、TipTap 富文本笔记（`/notes` + 服务端净化）、`/api/annotations` 归一化批注持久化（作者/权限）、批注器同步服务端、CLI `npm run add-user` | ✅ |
 | R7b 协作版基础设施 | 按 `db/schema.sql` 迁移 PG + Prisma、S3/MinIO 预签名直传、多用户工作区隔离（workspace_members） | 计划 |
-| R8 | 语义检索 | pgvector 嵌入、语义相关文献、AI 问答（RAG over 全文） | 计划 |
+| R8a 语义检索（本轮） | 零依赖本地形态 | `src/semantic.js`：中英文分词（拉丁词 + CJK 二元组）→ 分块 TF-IDF → 子空间迭代截断 SVD（k=64，确定性种子）→ 语义空间持久化 `data/semantic-index.sqlite`；`/api/search?mode=lexical\|semantic\|hybrid`（bm25 × LSA 余弦归一化混合）、related 升级为混合排序、`POST /api/ai/ask` RAG 问答（LSA+词面混合检索 → OpenAI 生成 / 本地抽取式降级）；随 `/api/index/rebuild` 自动重建 | ✅ |
+| R8b 语义检索 | pgvector 嵌入、语义相关文献、AI 问答（RAG over 全文） | 依赖 R7b 的 PG 基础设施；嵌入模型 + HNSW 索引替代本地 LSA | 计划 |
 | R9 | 实时协作 | WebSocket 批注同步、CRDT 笔记、移动端手势批注优化、笔记双向链接 | 计划 |
 
 ---

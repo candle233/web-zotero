@@ -23,7 +23,12 @@
         </div>
       </header>
       <div class="controls">
-        <div class="search-wrap"><input id="searchInput" type="search" placeholder="Search titles or full text" autocomplete="off"></div>
+        <div class="search-wrap">
+          <input id="searchInput" type="search" placeholder="Search titles or full text" autocomplete="off">
+          <label class="semantic-toggle" title="Blend LSA semantic ranking with phrase search">
+            <input type="checkbox" id="semanticToggle"> 语义
+          </label>
+        </div>
         <select id="collectionSelect" aria-label="Filter by collection"></select>
         <div class="button-row">
           <button id="searchButton" class="ghost">Refresh</button>
@@ -49,6 +54,10 @@
             <iframe id="pdfFrame" class="reader-frame" title="PDF reader"></iframe>
             <aside class="reader-side">
               <h3>AI reading</h3>
+              <div class="ask-row">
+                <input id="askInput" type="text" placeholder="Ask about this paper…" autocomplete="off">
+                <button id="askButton" class="ghost" hidden>提问</button>
+              </div>
               <div id="aiResult" class="ai-result"></div>
             </aside>
           </div>

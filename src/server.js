@@ -23,6 +23,8 @@ const { formatCitations, listStyles } = require('./citation-service');
 const { UserStore } = require('./users');
 const { WebAnnotationStore } = require('./annotations-store');
 const { sanitizeNoteHtml, noteHtmlToPlainText } = require('./notes-html');
+const { SemanticIndex } = require('./semantic');
+const { ask } = require('./ask');
 
 const PORT = Number(process.env.PORT || 8420);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -48,14 +50,75 @@ const searchIndex = new SearchIndex(DATA_DIR, zoteroDatabase);
 const webStore = new WebStore(DATA_DIR);
 const userStore = new UserStore(DATA_DIR);
 const annotationStore = new WebAnnotationStore(DATA_DIR);
+const semanticIndex = new SemanticIndex(DATA_DIR, searchIndex);
 const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore });
 const offlineLibrary = new OfflineLibrary(DATA_DIR);
 
 const ROLE_RANK = { viewer: 0, editor: 1, owner: 2 };
 // POST endpoints that compute without mutating anything; viewers may call them.
 const READ_ONLY_POST_ROUTES = new Set([
-  '/api/auth', '/api/metadata/resolve', '/api/citations/format', '/api/ai/summarize'
+  '/api/auth', '/api/metadata/resolve', '/api/citations/format', '/api/ai/summarize', '/api/ai/ask'
 ]);
+
+/** Blends FTS bm25 ranking with LSA cosine ranking (both normalized to [0,1]). */
+function hybridSearch(query, limit) {
+  const lexical = searchIndex.search(query, limit);
+  const semantic = semanticIndex.ready ? semanticIndex.search(query, limit) : [];
+  if (!semantic.length) return lexical.map(result => ({ ...result, mode: 'lexical' }));
+  if (!lexical.length) return semantic.map(result => ({ ...result, mode: 'semantic' }));
+  const lexScores = lexical.map(result => -result.score);
+  const semScores = semantic.map(result => result.score);
+  const normalize = (value, min, max) => (max > min ? (value - min) / (max - min) : 1);
+  const merged = new Map();
+  for (const result of lexical) {
+    const blended = 0.45 * normalize(-result.score, Math.min(...lexScores), Math.max(...lexScores));
+    merged.set(result.itemKey, { itemKey: result.itemKey, attachmentKey: result.attachmentKey, title: result.title, snippet: result.snippet, mode: 'lexical', blended });
+  }
+  for (const result of semantic) {
+    const blended = 0.55 * normalize(result.score, Math.min(...semScores), Math.max(...semScores));
+    const existing = merged.get(result.itemKey);
+    if (existing) {
+      existing.blended += blended;
+      existing.mode = 'hybrid';
+    } else {
+      merged.set(result.itemKey, { itemKey: result.itemKey, attachmentKey: result.attachmentKey, title: result.title, snippet: result.snippet, mode: 'semantic', blended });
+    }
+  }
+  return [...merged.values()]
+    .sort((a, b) => b.blended - a.blended)
+    .slice(0, limit)
+    .map(({ blended, ...result }) => ({ ...result, score: Number(blended.toFixed(4)) }));
+}
+
+/** Lexical (title-term overlap) + LSA related-paper merge. */
+function hybridRelated(itemKey, limit) {
+  const lexical = recommend(zoteroDatabase.items, itemKey, limit);
+  if (!semanticIndex.ready) return lexical.map(entry => ({ ...entry, mode: 'lexical' }));
+  const semantic = semanticIndex.related(itemKey, limit * 2);
+  const semanticScores = semantic.map(entry => entry.score);
+  const merged = new Map();
+  for (const entry of lexical) {
+    merged.set(entry.key, { ...entry, mode: 'lexical', blended: 0.45 * (1 - 0.05 * (lexical.indexOf(entry) / Math.max(1, lexical.length - 1))) });
+  }
+  const min = Math.min(...semanticScores, 0);
+  const max = Math.max(...semanticScores, 0.001);
+  for (const entry of semantic) {
+    const summary = zoteroDatabase.getItemByKey(entry.key);
+    if (!summary) continue;
+    const blended = 0.55 * ((entry.score - min) / (max - min));
+    const existing = merged.get(entry.key);
+    if (existing) {
+      existing.blended += blended;
+      existing.mode = 'hybrid';
+    } else {
+      merged.set(entry.key, { key: entry.key, title: summary.title, creators: summary.creators, itemType: summary.itemType, mode: 'semantic', blended });
+    }
+  }
+  return [...merged.values()]
+    .sort((a, b) => b.blended - a.blended)
+    .slice(0, limit)
+    .map(({ blended, ...entry }) => ({ ...entry, score: Number(blended.toFixed(4)) }));
+}
 
 function authMode() {
   const users = userStore.count();
@@ -276,7 +339,29 @@ async function handleApi(request, response, url) {
   if (/^\/api\/items\/[^/]+\/related$/.test(pathname) && request.method === 'GET') {
     await zoteroDatabase.refreshItems();
     const key = decodeURIComponent(pathname.split('/')[3]);
-    return sendJson(response, 200, { related: recommend(zoteroDatabase.items, key, 10) });
+    return sendJson(response, 200, { related: hybridRelated(key, 10) });
+  }
+
+  if (pathname === '/api/ai/ask' && request.method === 'POST') {
+    if (!semanticIndex.ready) {
+      return sendJson(response, 503, { error: 'The semantic index is not built yet. Trigger POST /api/index/rebuild first.' });
+    }
+    const body = await readJson(request);
+    if (typeof body.itemKey === 'string' && body.itemKey && !zoteroDatabase.itemDetail(body.itemKey)) {
+      return sendJson(response, 404, { error: 'Item not found' });
+    }
+    try {
+      const result = await ask({
+        question: body.question,
+        itemKey: typeof body.itemKey === 'string' && body.itemKey ? body.itemKey : null,
+        semanticIndex,
+        apiKey: OPENAI_API_KEY,
+        model: process.env.OPENAI_MODEL
+      });
+      return sendJson(response, 200, result);
+    } catch (error) {
+      return sendJson(response, error.statusCode || 500, { error: error.message || 'Question answering failed.' });
+    }
   }
 
   if (/^\/api\/items\/[^/]+\/files\/[^/]+\/offline$/.test(pathname) && request.method === 'POST') {
@@ -308,15 +393,39 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/search' && request.method === 'GET') {
+    const query = url.searchParams.get('q') || '';
+    const limit = Number(url.searchParams.get('limit') || 30);
+    const requestedMode = url.searchParams.get('mode');
+    const mode = requestedMode === 'lexical' || requestedMode === 'semantic' || requestedMode === 'hybrid'
+      ? requestedMode
+      : (semanticIndex.ready ? 'hybrid' : 'lexical');
+    let results;
+    if (mode === 'lexical') results = searchIndex.search(query, limit).map(result => ({ ...result, mode }));
+    else if (mode === 'semantic') results = semanticIndex.ready ? semanticIndex.search(query, limit).map(result => ({ ...result, mode })) : [];
+    else results = hybridSearch(query, limit);
     return sendJson(response, 200, {
-      query: url.searchParams.get('q') || '',
-      results: searchIndex.search(url.searchParams.get('q'), Number(url.searchParams.get('limit') || 30)),
-      index: searchIndex.status()
+      query,
+      mode,
+      results,
+      index: searchIndex.status(),
+      semantic: semanticIndex.status()
     });
   }
 
   if (pathname === '/api/index/rebuild' && request.method === 'POST') {
     const result = await searchIndex.reindex({ force: url.searchParams.get('force') === '1', limit: 100000 });
+    if (result.started) {
+      setImmediate(() => {
+        try {
+          const semantic = semanticIndex.rebuild();
+          if (semantic.ready) {
+            console.log(`Semantic index built: ${semantic.chunks} chunks, ${semantic.items} items, ${semantic.terms} terms, dim ${semantic.dimensions}`);
+          }
+        } catch (error) {
+          console.error(`Semantic index rebuild failed: ${error.message}`);
+        }
+      });
+    }
     return sendJson(response, result.started ? 200 : 202, result);
   }
 
@@ -495,7 +604,7 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/health') {
-    return sendJson(response, 200, { ...health.status(), auth: authMode() });
+    return sendJson(response, 200, { ...health.status(), semantic: semanticIndex.status(), auth: authMode() });
   }
 
   return sendJson(response, 404, { error: 'API route not found' });
@@ -543,6 +652,16 @@ async function main() {
   });
   setImmediate(() => searchIndex.reindex({ limit: 100000 }).then(result => {
     if (result.started) console.log(`Initial index complete: ${result.indexed} indexed, ${result.skipped} skipped`);
+    try {
+      const semantic = semanticIndex.rebuild();
+      if (semantic.ready) {
+        console.log(`Semantic index ready: ${semantic.chunks} chunks, ${semantic.items} items, ${semantic.terms} terms, dim ${semantic.dimensions}`);
+      } else if (semantic.reason) {
+        console.log(`Semantic index skipped: ${semantic.reason}`);
+      }
+    } catch (error) {
+      console.error(`Semantic index build failed: ${error.message}`);
+    }
   }).catch(error => console.error(error.message)));
   const shutdown = () => {
     server.close(() => {
@@ -550,6 +669,7 @@ async function main() {
       webStore.database.close();
       userStore.close();
       annotationStore.close();
+      semanticIndex.close();
       zoteroDatabase.close();
       process.exit(0);
     });

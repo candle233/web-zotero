@@ -11,7 +11,7 @@ const state = {
 };
 
 const elements = {};
-['searchInput','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','aiResult','summarizeButton','extractTextButton','searchResults','resultCount','resultList','toast','backButton','closeSearch']
+['searchInput','semanticToggle','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','aiResult','askInput','askButton','summarizeButton','extractTextButton','searchResults','resultCount','resultList','toast','backButton','closeSearch']
   .forEach(id => { elements[id] = document.getElementById(id); });
 
 function authHeaders(extra = {}) {
@@ -372,6 +372,8 @@ function showView(view) {
   if (view !== 'reader') {
     elements.summarizeButton.hidden = true;
     elements.extractTextButton.hidden = true;
+    elements.askButton.hidden = true;
+    elements.askInput.hidden = true;
   }
 }
 
@@ -390,6 +392,8 @@ async function openReader(key, attachmentKey, fileName = '') {
     await restoreProgress(key);
     elements.summarizeButton.hidden = false;
     elements.extractTextButton.hidden = false;
+    elements.askButton.hidden = false;
+    elements.askInput.hidden = false;
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -448,6 +452,32 @@ async function summarize() {
   } finally { elements.summarizeButton.disabled = false; }
 }
 
+async function askQuestion() {
+  const question = elements.askInput.value.trim();
+  if (!state.activeKey || !question) return;
+  elements.askButton.disabled = true;
+  elements.aiResult.innerHTML = '<span class="muted">检索相关段落并作答…</span>';
+  try {
+    const result = await request('/api/ai/ask', { method: 'POST', body: JSON.stringify({ itemKey: state.activeKey, question }) });
+    const passages = result.passages.map((passage, index) =>
+      `<li>[${index + 1}] ${escapeHtml(passage.title || passage.itemKey)} · score ${passage.score}</li>`).join('');
+    elements.aiResult.innerHTML = `
+      <h3>Answer <span class="muted">(${escapeHtml(result.provider)})</span></h3>
+      <p>${escapeHtml(result.answer).replace(/\[(\d+)\]/g, '<span class="muted">[$1]</span>')}</p>
+      ${result.passages.length ? `<h3>Passages</h3><ul>${passages}</ul>` : ''}
+      ${result.warning ? `<p class="muted">${escapeHtml(result.warning)}</p>` : ''}`;
+  } catch (error) {
+    elements.aiResult.textContent = error.message;
+  } finally {
+    elements.askButton.disabled = false;
+  }
+}
+
+elements.askButton.addEventListener('click', askQuestion);
+elements.askInput.addEventListener('keydown', event => {
+  if (event.key === 'Enter') askQuestion();
+});
+
 async function extractText() {
   if (!state.activeKey || !state.activeAttachment) return;
   elements.extractTextButton.disabled = true;
@@ -462,7 +492,8 @@ async function extractText() {
 function renderSearch(data) {
   state.searchMode = Boolean(data.query);
   elements.searchResults.classList.toggle('active', state.searchMode);
-  elements.resultCount.textContent = `${data.results.length} results · indexed ${data.index.indexed} documents`;
+  const modeLabel = { lexical: 'phrase', semantic: 'semantic', hybrid: 'hybrid' }[data.mode] || data.mode;
+  elements.resultCount.textContent = `${data.results.length} results · ${modeLabel} search · indexed ${data.index.indexed} documents`;
   elements.resultList.innerHTML = '';
   for (const result of data.results) {
     const button = document.createElement('button');
@@ -488,7 +519,8 @@ elements.searchInput.addEventListener('input', debounce(async () => {
     await loadItems();
     return;
   }
-  try { renderSearch(await request(`/api/search?q=${encodeURIComponent(value)}`)); }
+  const mode = elements.semanticToggle.checked ? 'hybrid' : 'lexical';
+  try { renderSearch(await request(`/api/search?q=${encodeURIComponent(value)}&mode=${mode}`)); }
   catch (error) { setStatus(error.message, true); }
 }, 280));
 

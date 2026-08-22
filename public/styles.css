@@ -146,6 +146,12 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .toast { position: fixed; left: 16px; bottom: 16px; max-width: min(90vw, 420px); padding: 12px; border-radius: 10px; background: #253248; border: 1px solid var(--border); box-shadow: 0 10px 30px #0007; font-size: 13px; display: none; z-index: 20; }
 .toast.show { display: block; }
 
+.semantic-toggle { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); cursor: pointer; user-select: none; }
+.search-wrap { display: flex; align-items: center; gap: 8px; }
+.ask-row { display: flex; gap: 7px; margin-bottom: 12px; }
+.ask-row input { flex: 1; }
+.ask-row button { width: auto; }
+
 @media (max-width: 820px) {
   .app { grid-template-columns: 1fr; }
   .sidebar { min-height: auto; max-height: 46dvh; border-right: 0; border-bottom: 1px solid var(--border); }

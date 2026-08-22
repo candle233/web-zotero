@@ -6,7 +6,8 @@ A lightweight, remotely accessible web companion for an existing local Zotero 7 
 
 - Responsive library for desktop and mobile, with collection filtering and metadata browsing.
 - Range-supported PDF streaming and browser-native PDF reading.
-- Zotero full-text cache indexing and phrase search across available PDFs.
+- Zotero full-text cache indexing and phrase search across available PDFs, plus zero-dependency semantic search (LSA over the corpus, Chinese/English tokenization) with hybrid ranking and LSA-based related-paper recommendations.
+- RAG question answering over the indexed full text (`POST /api/ai/ask`): local extractive answers with cited passages, upgraded to OpenAI generation when `OPENAI_API_KEY` is set.
 - Per-item web notes (plain text plus a TipTap rich-text editor at `/notes`), reading progress, and offline PDF copies stored separately under `data/`.
 - Multi-user accounts with owner/editor/viewer roles (scrypt passwords, expiring bearer sessions), with backward-compatible single-password and open modes.
 - Server-persisted web annotations (`/api/annotations`, viewport-normalized rects, per-user authorship).
@@ -68,13 +69,13 @@ Open the printed `http://<LAN-IP>:8420` address on a phone or computer. For acce
 ## Development
 
 ```powershell
-npm test                # unit tests (AI, recommendations, metadata, citations, users, annotations, note sanitizer, PDF coordinates) + typecheck
+npm test                # unit tests (AI, recommendations, metadata, citations, users, annotations, note sanitizer, semantic/LSA, PDF coordinates) + typecheck
 npm run typecheck       # TypeScript check of the React components (annotator, notes editor)
 npm run build:annotator # bundle the /annotator page into public/ (esbuild)
 npm run build:notes     # bundle the /notes rich-text editor page into public/ (esbuild)
 ```
 
-The annotator source lives in `src/pdf/` (coordinates, AnnotationLayer, PdfAnnotationViewer); the notes editor is `src/notes/notes-entry.tsx`; the metadata pipeline is `src/metadata.js` and the CSL engine is `src/citation-service.js`. User accounts and web annotations live in `src/users.js` / `src/annotations-store.js`; rich-note HTML is sanitized server-side in `src/notes-html.js`.
+The annotator source lives in `src/pdf/` (coordinates, AnnotationLayer, PdfAnnotationViewer); the notes editor is `src/notes/notes-entry.tsx`; the metadata pipeline is `src/metadata.js` and the CSL engine is `src/citation-service.js`. User accounts and web annotations live in `src/users.js` / `src/annotations-store.js`; rich-note HTML is sanitized server-side in `src/notes-html.js`. Semantic retrieval (LSA) is `src/semantic.js` and RAG answering is `src/ask.js`; the LSA space rebuilds automatically after each full-text index rebuild and persists to `data/semantic-index.sqlite`.
 
 ## Safety model
 
