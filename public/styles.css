@@ -188,3 +188,21 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .wiki-link { display: inline-block; background: #2c7a5c33; color: #7fd0ae; border: 1px solid #2c7a5c; border-radius: 6px; padding: 0 7px; margin: 0 2px; font-size: 13px; cursor: pointer; }
 .wiki-link:hover { background: #2c7a5c55; }
 .wiki-link.missing { border-style: dashed; color: var(--muted); cursor: default; background: transparent; }
+
+/* PDF reader fallback (browsers without an iframe PDF plugin, e.g. iOS Safari) */
+.pdf-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 28px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  margin: 16px;
+  max-width: 560px;
+}
+.pdf-fallback[hidden] { display: none; }
+.pdf-fallback h3 { margin: 0; }
+.pdf-fallback p { margin: 0; font-size: 14px; }
+.pdf-fallback button { width: auto; }

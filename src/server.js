@@ -676,17 +676,19 @@ async function handle(request, response) {
   try {
     if (url.pathname.startsWith('/api/')) return await handleApi(request, response, url);
     const routes = {
-      '/': ['index.html', 'text/html; charset=utf-8'],
-      '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-      '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
-      '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
+      // Entry HTML and its un-hashed assets revalidate on every load so UI
+      // updates reach already-open browsers; hashed bundles cache long.
+      '/': ['index.html', 'text/html; charset=utf-8', 0],
+      '/app.js': ['app.js', 'text/javascript; charset=utf-8', 0],
+      '/styles.css': ['styles.css', 'text/css; charset=utf-8', 0],
+      '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json', 3600],
       '/sw.js': ['sw.js', 'text/javascript; charset=utf-8', 0],
-      '/annotator': ['annotator.html', 'text/html; charset=utf-8'],
-      '/annotator.js': ['annotator.js', 'text/javascript; charset=utf-8'],
-      '/annotator.css': ['annotator.css', 'text/css; charset=utf-8'],
-      '/notes': ['notes.html', 'text/html; charset=utf-8'],
-      '/notes.js': ['notes.js', 'text/javascript; charset=utf-8'],
-      '/notes.css': ['notes.css', 'text/css; charset=utf-8'],
+      '/annotator': ['annotator.html', 'text/html; charset=utf-8', 0],
+      '/annotator.js': ['annotator.js', 'text/javascript; charset=utf-8', 86400],
+      '/annotator.css': ['annotator.css', 'text/css; charset=utf-8', 86400],
+      '/notes': ['notes.html', 'text/html; charset=utf-8', 0],
+      '/notes.js': ['notes.js', 'text/javascript; charset=utf-8', 86400],
+      '/notes.css': ['notes.css', 'text/css; charset=utf-8', 86400],
       '/vendor/pdf.worker.min.mjs': ['vendor/pdf.worker.min.mjs', 'text/javascript; charset=utf-8', 86400]
     };
     const route = routes[url.pathname];

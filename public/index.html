@@ -46,6 +46,8 @@
       <div class="toolbar">
         <button id="backButton" class="ghost" hidden>←</button>
         <h2 id="detailTitle">Library</h2>
+        <button id="openAnnotatorButton" class="ghost" hidden title="Open in the PDF.js annotator (works on every browser)">✏️ Annotator</button>
+        <button id="newTabButton" class="ghost" hidden title="Open the PDF in a new browser tab">↗ New tab</button>
         <button id="extractTextButton" class="ghost" hidden>Extract</button>
         <button id="summarizeButton" class="primary" hidden>AI reading</button>
       </div>
@@ -55,6 +57,12 @@
         </section>
         <section id="readerView" class="view">
           <div class="reader-shell">
+            <div id="pdfFallback" class="pdf-fallback" hidden>
+              <h3>This browser cannot display embedded PDFs</h3>
+              <p class="muted">Mobile and in-app browsers (e.g. iOS Safari, WeChat) often skip the built-in PDF viewer. Use the buttons below — the annotator renders every PDF on any device.</p>
+              <button id="fallbackAnnotatorButton">Open in annotator</button>
+              <button id="fallbackNewTabButton" class="ghost">Open PDF in new tab</button>
+            </div>
             <iframe id="pdfFrame" class="reader-frame" title="PDF reader"></iframe>
             <aside class="reader-side">
               <h3>AI reading</h3>

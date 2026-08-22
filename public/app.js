@@ -11,7 +11,7 @@ const state = {
 };
 
 const elements = {};
-['searchInput','semanticToggle','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','aiResult','askInput','askButton','summarizeButton','extractTextButton','searchResults','resultCount','resultList','toast','backButton','closeSearch','lookupInput','lookupButton','lookupBody','closeLookup']
+['searchInput','semanticToggle','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','pdfFallback','fallbackAnnotatorButton','fallbackNewTabButton','openAnnotatorButton','newTabButton','aiResult','askInput','askButton','summarizeButton','extractTextButton','searchResults','resultCount','resultList','toast','backButton','closeSearch','lookupInput','lookupButton','lookupBody','closeLookup']
   .forEach(id => { elements[id] = document.getElementById(id); });
 
 function authHeaders(extra = {}) {
@@ -439,7 +439,43 @@ function showView(view) {
     elements.extractTextButton.hidden = true;
     elements.askButton.hidden = true;
     elements.askInput.hidden = true;
+    elements.openAnnotatorButton.hidden = true;
+    elements.newTabButton.hidden = true;
+    elements.pdfFallback.hidden = true;
   }
+}
+
+// Some browsers never render PDFs inside an iframe: iOS Safari and most in-app
+// browsers (WeChat, DingTalk) ignore the PDF plugin, headless kernels ship
+// without one. Detect that and route the user to guaranteed-working options.
+function nativePdfViewerSupported() {
+  return typeof navigator === 'object' && navigator.pdfViewerEnabled === true;
+}
+
+function annotatorUrl(key, attachmentKey, title = '') {
+  const params = new URLSearchParams({ item: key, file: attachmentKey });
+  if (title) params.set('title', title);
+  return `/annotator?${params}`;
+}
+
+let pdfFailureTimer = null;
+function detectIframePdfFailure() {
+  clearTimeout(pdfFailureTimer);
+  pdfFailureTimer = setTimeout(() => {
+    try {
+      const doc = elements.pdfFrame.contentDocument;
+      if (!doc) return; // no access = plugin document = PDF rendered natively
+      const rendered = doc.body && (doc.body.querySelector('embed[type="application/pdf"], object[type="application/pdf"]') || doc.body.textContent.trim());
+      if (!rendered) showPdfFallback();
+    } catch {
+      // Cross-origin/block = plugin viewer handled it.
+    }
+  }, 2200);
+}
+
+function showPdfFallback() {
+  elements.pdfFrame.src = 'about:blank';
+  elements.pdfFallback.hidden = false;
 }
 
 async function openReader(key, attachmentKey, fileName = '') {
@@ -449,9 +485,18 @@ async function openReader(key, attachmentKey, fileName = '') {
     state.view = 'reader';
     showView('reader');
     elements.backButton.hidden = false;
+    elements.pdfFallback.hidden = true;
     let pdfUrl = `/api/items/${encodeURIComponent(key)}/files/${encodeURIComponent(attachmentKey)}#view=FitH`;
     if (state.token) pdfUrl = pdfUrl.replace('#', `?token=${encodeURIComponent(state.token)}#`);
-    elements.pdfFrame.src = pdfUrl;
+    if (nativePdfViewerSupported()) {
+      elements.pdfFrame.src = pdfUrl;
+      detectIframePdfFailure();
+    } else {
+      // No native in-frame PDF rendering on this browser: show the escape
+      // hatch immediately instead of a blank black pane.
+      elements.pdfFrame.src = 'about:blank';
+      showPdfFallback();
+    }
     elements.detailTitle.textContent = fileName || 'PDF reader';
     elements.aiResult.innerHTML = '<span class="muted">Open a paper and run AI reading to extract its main argument.</span>';
     await restoreProgress(key);
@@ -459,6 +504,8 @@ async function openReader(key, attachmentKey, fileName = '') {
     elements.extractTextButton.hidden = false;
     elements.askButton.hidden = false;
     elements.askInput.hidden = false;
+    elements.openAnnotatorButton.hidden = false;
+    elements.newTabButton.hidden = false;
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -611,6 +658,23 @@ elements.extractTextButton.addEventListener('click', extractText);
 elements.lookupButton.addEventListener('click', runLookup);
 elements.lookupInput.addEventListener('keydown', event => { if (event.key === 'Enter') runLookup(); });
 elements.closeLookup.addEventListener('click', () => { state.view = 'detail'; showView('detail'); });
+
+function openAnnotatorForCurrent() {
+  if (!state.activeKey || !state.activeAttachment) return;
+  window.open(annotatorUrl(state.activeKey, state.activeAttachment, elements.detailTitle.textContent), '_blank', 'noopener');
+}
+
+function openPdfInNewTab() {
+  if (!state.activeKey || !state.activeAttachment) return;
+  const base = `/api/items/${encodeURIComponent(state.activeKey)}/files/${encodeURIComponent(state.activeAttachment)}`;
+  const url = state.token ? `${base}?token=${encodeURIComponent(state.token)}` : base;
+  window.open(url, '_blank', 'noopener');
+}
+
+elements.openAnnotatorButton.addEventListener('click', openAnnotatorForCurrent);
+elements.newTabButton.addEventListener('click', openPdfInNewTab);
+elements.fallbackAnnotatorButton.addEventListener('click', openAnnotatorForCurrent);
+elements.fallbackNewTabButton.addEventListener('click', openPdfInNewTab);
 
 // ---------------------------------------------------------------------------
 // Metadata lookup by identifier (DOI / arXiv / ISBN / BibTeX)

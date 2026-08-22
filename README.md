@@ -5,7 +5,7 @@ A lightweight, remotely accessible web companion for an existing local Zotero 7 
 ## Features
 
 - Responsive library for desktop and mobile, with collection filtering and metadata browsing.
-- Range-supported PDF streaming and browser-native PDF reading.
+- Range-supported PDF streaming and browser-native PDF reading, with automatic fallback: browsers that cannot render PDFs inside an iframe (iOS Safari, in-app browsers) get a card linking to the PDF.js annotator and a new-tab open, plus always-available toolbar escape hatches.
 - Zotero full-text cache indexing and phrase search across available PDFs, plus zero-dependency semantic search (LSA over the corpus, Chinese/English tokenization) with hybrid ranking and LSA-based related-paper recommendations.
 - RAG question answering over the indexed full text (`POST /api/ai/ask`): local extractive answers with cited passages, upgraded to OpenAI generation when `OPENAI_API_KEY` is set.
 - Per-item web notes (plain text plus a TipTap rich-text editor at `/notes`), reading progress, and offline PDF copies stored separately under `data/`.
