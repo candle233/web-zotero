@@ -18,6 +18,8 @@ const { HealthMonitor } = require('./health');
 const { annotationsToCsv, annotationsToMarkdown } = require('./annotation-export');
 const { recommend } = require('./recommend');
 const { OfflineLibrary } = require('./offline');
+const { resolveIdentifier } = require('./metadata');
+const { formatCitations, listStyles } = require('./citation-service');
 
 const PORT = Number(process.env.PORT || 8420);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -302,6 +304,55 @@ async function handleApi(request, response, url) {
     }
   }
 
+  if (pathname === '/api/metadata/resolve' && request.method === 'POST') {
+    const body = await readJson(request);
+    if (typeof body.input !== 'string' || !body.input.trim()) {
+      return sendJson(response, 400, { error: 'Field "input" (string) is required.' });
+    }
+    try {
+      const result = await resolveIdentifier(body.input, { timeoutMs: Number(body.timeoutMs) || 12000 });
+      return sendJson(response, 200, result);
+    } catch (error) {
+      return sendJson(response, error.statusCode || 502, { error: error.message || 'Metadata resolution failed.' });
+    }
+  }
+
+  if (pathname === '/api/citations/styles' && request.method === 'GET') {
+    return sendJson(response, 200, listStyles());
+  }
+
+  if (pathname === '/api/citations/format' && request.method === 'POST') {
+    let body;
+    try {
+      body = await readJson(request);
+    } catch (error) {
+      return sendJson(response, 400, { error: `Invalid JSON body: ${error.message}` });
+    }
+    let items = Array.isArray(body.items) ? body.items : null;
+    if (!items && typeof body.itemKey === 'string') {
+      const detail = zoteroDatabase.itemDetail(body.itemKey);
+      if (!detail) return sendJson(response, 404, { error: 'Item not found' });
+      items = [{
+        key: detail.key,
+        itemType: detail.itemType || 'journalArticle',
+        title: detail.title,
+        creators: detail.creators || [],
+        fields: detail.fields || {},
+      }];
+    }
+    try {
+      const result = formatCitations({
+        items,
+        style: body.style,
+        lang: body.lang,
+        mode: body.mode,
+      });
+      return sendJson(response, 200, result);
+    } catch (error) {
+      return sendJson(response, error.statusCode || 500, { error: error.message || 'Citation formatting failed.' });
+    }
+  }
+
   if (pathname === '/api/plugins') {
     const plugins = await installedDesktopPlugins(ZOTERO_PROFILE_ROOT);
     return sendJson(response, 200, {
@@ -331,7 +382,11 @@ async function handle(request, response) {
       '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
       '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
       '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
-      '/sw.js': ['sw.js', 'text/javascript; charset=utf-8', 0]
+      '/sw.js': ['sw.js', 'text/javascript; charset=utf-8', 0],
+      '/annotator': ['annotator.html', 'text/html; charset=utf-8'],
+      '/annotator.js': ['annotator.js', 'text/javascript; charset=utf-8'],
+      '/annotator.css': ['annotator.css', 'text/css; charset=utf-8'],
+      '/vendor/pdf.worker.min.mjs': ['vendor/pdf.worker.min.mjs', 'text/javascript; charset=utf-8', 86400]
     };
     const route = routes[url.pathname];
     if (route) return await serveFile(response, ...route);

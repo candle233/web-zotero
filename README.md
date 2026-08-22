@@ -13,6 +13,11 @@ A lightweight, remotely accessible web companion for an existing local Zotero 7 
 - Citation export in APA and BibTeX, metadata export in CSV and JSON.
 - Desktop annotations browsing plus Markdown/CSV export.
 - Lexical related-paper recommendations and service health reporting.
+- Interactive PDF annotator (React + PDF.js) at `/annotator` with viewport-normalized highlights, floating color/note toolbar, and a jump-to-page annotation sidebar; export as Markdown. Run `npm run build:annotator` after installing dev dependencies.
+- Metadata ingestion API: paste a DOI, arXiv ID, ISBN or BibTeX and get normalized item metadata (`POST /api/metadata/resolve`), with DOI content negotiation and Crossref fallback.
+- CSL citation engine (`POST /api/citations/format`, `GET /api/citations/styles`): citeproc-js with bundled `apa`, `ieee`, `nature`, `gb-t-7714-2015` styles and `en-US`/`zh-CN` locales, plus a graceful fallback formatter.
+
+See `ARCHITECTURE.md` for the full architecture blueprint (stack rationale, data flow, API spec, roadmap) and `db/schema.sql` for the PostgreSQL schema of the multi-user build.
 
 ## Requirements
 
@@ -46,6 +51,16 @@ npm start
 ```
 
 Open the printed `http://<LAN-IP>:8420` address on a phone or computer. For access outside the LAN, place the service behind a TLS reverse proxy or VPN.
+
+## Development
+
+```powershell
+npm test                # unit tests (AI, recommendations, metadata, citations, PDF coordinates) + typecheck
+npm run typecheck       # TypeScript check of the React/PDF.js annotator components
+npm run build:annotator # bundle the /annotator page into public/ (esbuild)
+```
+
+The annotator source lives in `src/pdf/` (coordinates, AnnotationLayer, PdfAnnotationViewer); the metadata pipeline is `src/metadata.js` and the CSL engine is `src/citation-service.js`.
 
 ## Safety model
 

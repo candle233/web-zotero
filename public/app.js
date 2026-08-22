@@ -270,12 +270,25 @@ function renderDetail(item) {
     panel.className = 'panel';
     panel.innerHTML = `<h3>Available PDFs (${item.attachments.filter(file => file.exists).length})</h3>`;
     for (const file of item.attachments.filter(candidate => candidate.exists)) {
-      const button = document.createElement('button');
-      button.className = 'ghost';
-      button.style.marginBottom = '7px';
-      button.textContent = file.fileName;
-      button.addEventListener('click', () => openReader(item.key, file.key, file.fileName));
-      panel.append(button);
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.gap = '7px';
+      row.style.marginBottom = '7px';
+      const read = document.createElement('button');
+      read.className = 'ghost';
+      read.style.flex = '1';
+      read.textContent = file.fileName;
+      read.addEventListener('click', () => openReader(item.key, file.key, file.fileName));
+      const annotate = document.createElement('button');
+      annotate.className = 'ghost';
+      annotate.textContent = '✏️ Annotate';
+      annotate.title = 'Open in interactive annotator (highlight & note)';
+      annotate.addEventListener('click', () => {
+        const url = `/annotator?item=${encodeURIComponent(item.key)}&file=${encodeURIComponent(file.key)}&title=${encodeURIComponent(item.title || file.fileName)}`;
+        window.open(url, '_blank', 'noopener');
+      });
+      row.append(read, annotate);
+      panel.append(row);
     }
     card.append(panel);
   } else {
