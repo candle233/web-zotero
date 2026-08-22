@@ -183,3 +183,8 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 .csl-preview .csl-entry { margin: 0 0 10px; padding-left: 1.6em; text-indent: -1.6em; }
 .csl-preview .csl-left-margin { display: inline-block; min-width: 2.2em; }
+
+/* Wiki links in rendered notes ([[title]] -> clickable item link) */
+.wiki-link { display: inline-block; background: #2c7a5c33; color: #7fd0ae; border: 1px solid #2c7a5c; border-radius: 6px; padding: 0 7px; margin: 0 2px; font-size: 13px; cursor: pointer; }
+.wiki-link:hover { background: #2c7a5c55; }
+.wiki-link.missing { border-style: dashed; color: var(--muted); cursor: default; background: transparent; }

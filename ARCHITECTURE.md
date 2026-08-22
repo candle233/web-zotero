@@ -119,6 +119,8 @@ Web Zotero 是本地 Zotero 文献库的远程网页伴侣系统：在电脑与�
 | GET/POST | `/api/items/:key/notes` | POST 新增 `{html}` 富文本载荷：服务端白名单净化（`src/notes-html.js`）后存 `content_html`，同时维护纯文本列 |
 | GET | `/api/search?q=&mode=lexical\|semantic\|hybrid&limit=` | R8a：混合检索（FTS bm25 + LSA 余弦，归一化后 0.45/0.55 加权），语义索引未就绪时回退 lexical；响应含 `semantic` 状态 |
 | POST | `/api/ai/ask` `{itemKey?, question}` | R8a：RAG 问答 → `{provider, question, answer, passages[]}`；LSA+词面混合检索 top-4 段落，OpenAI 可用时生成式作答（带 [n] 引用），否则本地抽取式句子排序作答 |
+| GET | `/api/events` | R9a：SSE 实时事件流（`text/event-stream`，25s 心跳，`?token=` 鉴权）——批注 created/updated/deleted 事件带完整载荷与操作者邮箱，广播至所有已连接页面；服务关闭时统一销毁连接 |
+| GET | `/api/items/:key/mentions` | R9a：笔记反链——扫描全部 Web 笔记中 `[[该条目标题]]` 的出现，返回来源条目与时间 |
 
 角色门禁：`owner > editor > viewer`；viewer 仅读（含只读 POST：metadata/resolve、citations/format、ai/summarize），写操作 403；用户管理仅 owner。
 
@@ -142,7 +144,8 @@ Web Zotero 是本地 Zotero 文献库的远程网页伴侣系统：在电脑与�
 | R8a 语义检索（本轮） | 零依赖本地形态 | `src/semantic.js`：中英文分词（拉丁词 + CJK 二元组）→ 分块 TF-IDF → 子空间迭代截断 SVD（k=64，确定性种子）→ 语义空间持久化 `data/semantic-index.sqlite`；`/api/search?mode=lexical\|semantic\|hybrid`（bm25 × LSA 余弦归一化混合）、related 升级为混合排序、`POST /api/ai/ask` RAG 问答（LSA+词面混合检索 → OpenAI 生成 / 本地抽取式降级）；随 `/api/index/rebuild` 自动重建 | ✅ |
 | R7c 元数据/引文 UI（本轮） | 管线接入界面 | 侧栏「按标识符查询」面板（DOI/arXiv/ISBN/BibTeX → 元数据卡片 + 来源徽标 + 摘要，多条目 BibTeX 批量解析）；共享 CSL 引文预览组件（样式 apa/ieee/nature/gb-t-7714-2015 × 语言 en-US/zh-CN × bibliography/in-text 切换、citeproc HTML 悬挂缩进渲染、一键复制、降级警告）；条目详情内嵌同一引文面板；doi.org JATS 摘要标记清理 | ✅ |
 | R8b 语义检索 | pgvector 嵌入、语义相关文献、AI 问答（RAG over 全文） | 依赖 R7b 的 PG 基础设施；嵌入模型 + HNSW 索引替代本地 LSA | 计划 |
-| R9 | 实时协作 | WebSocket 批注同步、CRDT 笔记、移动端手势批注优化、笔记双向链接 | 计划 |
+| R9a 实时协作基础（本轮） | SSE 实时批注同步 + 笔记双向链接 | `/api/events` SSE 事件总线（`src/events.js`，零依赖 node:http 长连接 + 心跳 + 关闭清理）；批注器 EventSource 订阅远端变更（serverId 回显去重、断线自动重连）；TipTap `[[文献]]` 插入面板 + 条目详情 wiki 链接渲染 + `/mentions` 反链面板；批注器/笔记编辑器移动端适配 | ✅ |
+| R9b 实时协作深化 | CRDT 笔记、移动端手势批注优化、笔记并发编辑合并 | 计划 |
 
 ---
 

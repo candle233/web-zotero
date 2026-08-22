@@ -36,6 +36,8 @@ function writeLocal(itemKey: string, attachmentKey: string, annotations: readonl
 
 interface ServerAnnotation {
   id: number;
+  itemKey: string;
+  attachmentKey: string;
   pageIndex: number;
   pageLabel: string | null;
   type: string;
@@ -113,6 +115,46 @@ function AnnotatorApp() {
       cancelled = true;
     };
   }, [itemKey, attachmentKey, authHeaders]);
+
+  // Live sync (R9): remote annotation changes stream in over SSE. Our own
+  // mutations are skipped via serverId matching (the server echoes them too).
+  React.useEffect(() => {
+    if (!itemKey || !attachmentKey) return;
+    const source = new EventSource(`/api/events${token ? `?token=${encodeURIComponent(token)}` : ''}`);
+    const onAnnotation = (rawEvent: Event) => {
+      const payload = JSON.parse((rawEvent as MessageEvent).data) as {
+        action: 'created' | 'updated' | 'deleted';
+        by: string | null;
+        annotation?: ServerAnnotation;
+        annotationId?: number;
+        itemKey?: string | null;
+        attachmentKey?: string | null;
+      };
+      if (payload.action === 'deleted') {
+        if (payload.itemKey !== null && payload.itemKey !== itemKey) return;
+        if (payload.attachmentKey !== null && payload.attachmentKey !== attachmentKey) return;
+        setAnnotations(current => current.filter(entry => entry.serverId !== payload.annotationId));
+        setSyncStatus(`Live: annotation deleted${payload.by ? ` by ${payload.by}` : ''}`);
+        return;
+      }
+      const row = payload.annotation;
+      if (!row || row.itemKey !== itemKey || row.attachmentKey !== attachmentKey) return;
+      if (payload.action === 'created') {
+        setAnnotations(current =>
+          current.some(entry => entry.serverId === row.id) ? current : [...current, fromServer(row)]);
+        setSyncStatus(`Live: annotation added${payload.by ? ` by ${payload.by}` : ''}`);
+      } else {
+        setAnnotations(current =>
+          current.map(entry => (entry.serverId === row.id ? fromServer(row) : entry)));
+        setSyncStatus(`Live: annotation updated${payload.by ? ` by ${payload.by}` : ''}`);
+      }
+    };
+    source.addEventListener('annotation', onAnnotation as EventListener);
+    return () => {
+      source.removeEventListener('annotation', onAnnotation as EventListener);
+      source.close();
+    };
+  }, [itemKey, attachmentKey, token]);
 
   const persist = React.useCallback(
     (next: PdfAnnotation[]) => {

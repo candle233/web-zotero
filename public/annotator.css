@@ -203,9 +203,22 @@ body {
   left: 50%;
   transform: translateX(-50%);
   z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 20px);
 }
+.wz-sync-status { color: var(--wz-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 @media (max-width: 760px) {
   .wz-body { flex-direction: column; }
   .wz-sidebar { width: auto; border-left: none; border-top: 1px solid var(--wz-border); max-height: 40vh; }
+  .wz-toolbar { gap: 10px; padding: 8px 10px; }
+  .wz-toolbar button, .wz-export-row button { padding: 10px 16px; font-size: 15px; touch-action: manipulation; }
+  .wz-scroll { padding: 10px; gap: 12px; }
+  .wz-floating-toolbar { flex-wrap: wrap; max-width: calc(100vw - 16px); }
+  .wz-floating-toolbar > button { width: 34px; height: 34px; }
+  .wz-note-editor { width: min(220px, 60vw); }
+  .wz-export-row { bottom: 10px; flex-wrap: wrap; justify-content: center; }
+  .wz-sync-status { max-width: 40vw; }
 }

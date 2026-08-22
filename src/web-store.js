@@ -56,6 +56,23 @@ class WebStore {
   getProgress(itemKey) {
     return this.database.prepare('SELECT item_key AS itemKey, scroll_percent AS scrollPercent, updated_at AS updatedAt FROM reading_progress WHERE item_key = ?').get(itemKey) || { itemKey, scrollPercent: 0 };
   }
+
+  /**
+   * Backlinks for wiki-style note links: notes whose text contains
+   * "[[title]]" for the given item title. LIKE is only a prefilter; the
+   * exact substring check handles LIKE wildcards inside the title.
+   */
+  mentions(title) {
+    const needle = `[[${String(title || '')}]]`;
+    if (!String(title || '').trim()) return [];
+    const rows = this.database.prepare(
+      "SELECT item_key, content, content_html, updated_at FROM web_notes WHERE content LIKE ? OR content_html LIKE ?"
+    ).all(`%${title}%`, `%${title}%`);
+    return rows
+      .filter(row => String(row.content || '').includes(needle)
+        || String(row.content_html || '').includes(needle))
+      .map(row => ({ itemKey: row.item_key, updatedAt: row.updated_at }));
+  }
 }
 
 module.exports = { WebStore };

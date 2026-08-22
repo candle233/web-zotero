@@ -173,6 +173,32 @@ function actionButton(label, onClick, className = 'ghost') {
   return button;
 }
 
+function renderWikiNoteHtml(container, html) {
+  container.replaceChildren(sanitizeZoteroNoteHtml(html));
+  const wikiPattern = /\[\[([^\[\]]{2,300})\]\]/;
+  const convert = textNode => {
+    const value = String(textNode.nodeValue || '');
+    const match = value.match(wikiPattern);
+    if (!match) return null;
+    const title = match[1].trim();
+    const target = state.items.find(candidate => candidate.title === title);
+    const link = document.createElement(target ? 'button' : 'span');
+    link.className = target ? 'wiki-link' : 'wiki-link missing';
+    link.textContent = title;
+    if (target) link.addEventListener('click', () => openItem(target.key));
+    const after = document.createTextNode(value.slice(match.index + match[0].length));
+    textNode.replaceWith(document.createTextNode(value.slice(0, match.index)), link, after);
+    return after;
+  };
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+  for (const node of textNodes) {
+    let next = convert(node);
+    while (next) next = convert(next);
+  }
+}
+
 function renderDetail(item) {
   elements.detailTitle.textContent = item.title;
   elements.detailBody.innerHTML = '';
@@ -224,6 +250,9 @@ function renderDetail(item) {
   const notePanel = document.createElement('section');
   notePanel.className = 'panel';
   notePanel.innerHTML = '<h3>Web notes</h3>';
+  const noteView = document.createElement('div');
+  noteView.className = 'note-html';
+  noteView.hidden = true;
   const noteArea = document.createElement('textarea');
   noteArea.className = 'note-area';
   noteArea.placeholder = 'Write reading notes. Saved on this server.';
@@ -241,7 +270,7 @@ function renderDetail(item) {
       setStatus(error.message, true);
     } finally { saveNote.disabled = false; }
   });
-  notePanel.append(noteArea, saveNote, noteStatus);
+  notePanel.append(noteView, noteArea, saveNote, noteStatus);
   const richText = document.createElement('button');
   richText.className = 'ghost';
   richText.textContent = '✍️ Rich text editor';
@@ -253,10 +282,45 @@ function renderDetail(item) {
   });
   notePanel.append(richText);
   request(`/api/items/${item.key}/notes`).then(note => {
-    noteArea.value = note.content || '';
     if (note.updatedAt) noteStatus.textContent = `Saved ${new Date(note.updatedAt).toLocaleString()}`;
+    if (note.html) {
+      noteView.hidden = false;
+      noteArea.hidden = true;
+      saveNote.hidden = true;
+      renderWikiNoteHtml(noteView, note.html);
+    } else {
+      noteArea.value = note.content || '';
+    }
   }).catch(error => setStatus(error.message, true));
   card.append(notePanel);
+
+  const mentionsPanel = document.createElement('section');
+  mentionsPanel.className = 'panel';
+  mentionsPanel.innerHTML = '<h3>Mentioned in</h3><div class="muted">Loading…</div>';
+  request(`/api/items/${encodeURIComponent(item.key)}/mentions`).then(data => {
+    mentionsPanel.innerHTML = '<h3>Mentioned in</h3>';
+    if (!data.mentions.length) {
+      const hint = document.createElement('div');
+      hint.className = 'muted';
+      hint.textContent = `No notes link here yet — reference this paper as [[${data.title}]] in any note.`;
+      mentionsPanel.append(hint);
+      return;
+    }
+    for (const mention of data.mentions) {
+      const button = document.createElement('button');
+      button.className = 'item';
+      const title = document.createElement('div');
+      title.className = 'item-title';
+      title.textContent = mention.title;
+      const meta = document.createElement('div');
+      meta.className = 'item-meta';
+      meta.textContent = mention.updatedAt ? new Date(mention.updatedAt).toLocaleString() : '';
+      button.append(title, meta);
+      button.addEventListener('click', () => openItem(mention.itemKey));
+      mentionsPanel.append(button);
+    }
+  }).catch(() => { mentionsPanel.innerHTML = '<h3>Mentioned in</h3>'; });
+  card.append(mentionsPanel);
 
   if (item.notes.length) {
     const panel = document.createElement('section');

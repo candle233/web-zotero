@@ -25,6 +25,7 @@ const { WebAnnotationStore } = require('./annotations-store');
 const { sanitizeNoteHtml, noteHtmlToPlainText } = require('./notes-html');
 const { SemanticIndex } = require('./semantic');
 const { ask } = require('./ask');
+const { EventBus } = require('./events');
 
 const PORT = Number(process.env.PORT || 8420);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -51,6 +52,7 @@ const webStore = new WebStore(DATA_DIR);
 const userStore = new UserStore(DATA_DIR);
 const annotationStore = new WebAnnotationStore(DATA_DIR);
 const semanticIndex = new SemanticIndex(DATA_DIR, searchIndex);
+const eventBus = new EventBus();
 const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore });
 const offlineLibrary = new OfflineLibrary(DATA_DIR);
 
@@ -342,6 +344,22 @@ async function handleApi(request, response, url) {
     return sendJson(response, 200, { related: hybridRelated(key, 10) });
   }
 
+  // Backlinks: which notes contain a "[[<this item's title>]]" wiki link.
+  if (/^\/api\/items\/[^/]+\/mentions$/.test(pathname) && request.method === 'GET') {
+    const key = decodeURIComponent(pathname.split('/')[3]);
+    const item = zoteroDatabase.getItemByKey(key);
+    if (!item) return sendJson(response, 404, { error: 'Item not found' });
+    const mentions = webStore.mentions(item.title).map(entry => {
+      const source = zoteroDatabase.getItemByKey(entry.itemKey);
+      return {
+        itemKey: entry.itemKey,
+        title: source ? source.title : entry.itemKey,
+        updatedAt: entry.updatedAt
+      };
+    });
+    return sendJson(response, 200, { title: item.title, mentions });
+  }
+
   if (pathname === '/api/ai/ask' && request.method === 'POST') {
     if (!semanticIndex.ready) {
       return sendJson(response, 503, { error: 'The semantic index is not built yet. Trigger POST /api/index/rebuild first.' });
@@ -577,20 +595,20 @@ async function handleApi(request, response, url) {
     if (!zoteroDatabase.itemDetail(String(body.itemKey || ''))) {
       return sendJson(response, 404, { error: 'Item not found' });
     }
-    return sendJson(response, 201, {
-      annotation: annotationStore.create({
-        itemKey: body.itemKey,
-        attachmentKey: body.attachmentKey,
-        authorId: effective.user ? effective.user.id : null,
-        pageIndex: body.pageIndex,
-        pageLabel: body.pageLabel,
-        type: body.type,
-        rects: body.rects,
-        color: body.color,
-        comment: body.comment,
-        quote: body.quote
-      })
+    const annotation = annotationStore.create({
+      itemKey: body.itemKey,
+      attachmentKey: body.attachmentKey,
+      authorId: effective.user ? effective.user.id : null,
+      pageIndex: body.pageIndex,
+      pageLabel: body.pageLabel,
+      type: body.type,
+      rects: body.rects,
+      color: body.color,
+      comment: body.comment,
+      quote: body.quote
     });
+    eventBus.publish('annotation', { action: 'created', by: effective.user ? effective.user.email : null, annotation });
+    return sendJson(response, 201, { annotation });
   }
 
   if (/^\/api\/annotations\/\d+$/.test(pathname)) {
@@ -598,9 +616,52 @@ async function handleApi(request, response, url) {
     const actor = effective.user ? { id: effective.user.id, role: effective.user.role } : null;
     if (request.method === 'PATCH') {
       const body = await readJson(request);
-      return sendJson(response, 200, { annotation: annotationStore.update(annotationId, body, actor) });
+      const annotation = annotationStore.update(annotationId, body, actor);
+      eventBus.publish('annotation', { action: 'updated', by: effective.user ? effective.user.email : null, annotation });
+      return sendJson(response, 200, { annotation });
     }
-    if (request.method === 'DELETE') return sendJson(response, 200, annotationStore.remove(annotationId, actor));
+    if (request.method === 'DELETE') {
+      const target = annotationStore.get(annotationId);
+      const result = annotationStore.remove(annotationId, actor);
+      eventBus.publish('annotation', {
+        action: 'deleted',
+        by: effective.user ? effective.user.email : null,
+        annotationId,
+        itemKey: target ? target.itemKey : null,
+        attachmentKey: target ? target.attachmentKey : null
+      });
+      return sendJson(response, 200, result);
+    }
+  }
+
+  // Server-Sent Events stream: live annotation sync for connected pages.
+  if (pathname === '/api/events' && request.method === 'GET') {
+    response.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-store',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no'
+    });
+    response.write('retry: 5000\n\n');
+    const unsubscribe = eventBus.subscribe(
+      event => {
+        response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`);
+        return true;
+      },
+      { close: () => response.destroy() }
+    );
+    const heartbeat = setInterval(() => {
+      try {
+        response.write(': ping\n\n');
+      } catch {
+        clearInterval(heartbeat);
+      }
+    }, 25000);
+    request.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+    return;
   }
 
   if (pathname === '/api/health') {
@@ -664,6 +725,7 @@ async function main() {
     }
   }).catch(error => console.error(error.message)));
   const shutdown = () => {
+    eventBus.closeAll();
     server.close(() => {
       searchIndex.database.close();
       webStore.database.close();

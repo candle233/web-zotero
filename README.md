@@ -10,7 +10,8 @@ A lightweight, remotely accessible web companion for an existing local Zotero 7 
 - RAG question answering over the indexed full text (`POST /api/ai/ask`): local extractive answers with cited passages, upgraded to OpenAI generation when `OPENAI_API_KEY` is set.
 - Per-item web notes (plain text plus a TipTap rich-text editor at `/notes`), reading progress, and offline PDF copies stored separately under `data/`.
 - Multi-user accounts with owner/editor/viewer roles (scrypt passwords, expiring bearer sessions), with backward-compatible single-password and open modes.
-- Server-persisted web annotations (`/api/annotations`, viewport-normalized rects, per-user authorship).
+- Server-persisted web annotations (`/api/annotations`, viewport-normalized rects, per-user authorship) with **live sync**: annotation changes stream to every open page over Server-Sent Events (`/api/events`, zero-dependency), so multiple tabs or users see highlights appear in real time.
+- Wiki-style bidirectional note links: type `[[` in the rich-text editor to link any library item; item pages render the links and show a "Mentioned in" backlink panel (`GET /api/items/:key/mentions`).
 - Local extractive AI reading, with optional OpenAI fallback/upgrade via `OPENAI_API_KEY`.
 - Desktop plug-in inventory endpoint and compatibility guidance for installed XPIs.
 - Citation export in APA and BibTeX, metadata export in CSV and JSON.
@@ -69,13 +70,13 @@ Open the printed `http://<LAN-IP>:8420` address on a phone or computer. For acce
 ## Development
 
 ```powershell
-npm test                # unit tests (AI, recommendations, metadata, citations, users, annotations, note sanitizer, semantic/LSA, PDF coordinates) + typecheck
+npm test                # unit tests (AI, recommendations, metadata, citations, users, annotations, note sanitizer, semantic/LSA, SSE events, PDF coordinates) + typecheck
 npm run typecheck       # TypeScript check of the React components (annotator, notes editor)
 npm run build:annotator # bundle the /annotator page into public/ (esbuild)
 npm run build:notes     # bundle the /notes rich-text editor page into public/ (esbuild)
 ```
 
-The annotator source lives in `src/pdf/` (coordinates, AnnotationLayer, PdfAnnotationViewer); the notes editor is `src/notes/notes-entry.tsx`; the metadata pipeline is `src/metadata.js` and the CSL engine is `src/citation-service.js`. User accounts and web annotations live in `src/users.js` / `src/annotations-store.js`; rich-note HTML is sanitized server-side in `src/notes-html.js`. Semantic retrieval (LSA) is `src/semantic.js` and RAG answering is `src/ask.js`; the LSA space rebuilds automatically after each full-text index rebuild and persists to `data/semantic-index.sqlite`.
+The annotator source lives in `src/pdf/` (coordinates, AnnotationLayer, PdfAnnotationViewer); the notes editor is `src/notes/notes-entry.tsx`; the metadata pipeline is `src/metadata.js` and the CSL engine is `src/citation-service.js`. User accounts and web annotations live in `src/users.js` / `src/annotations-store.js`; rich-note HTML is sanitized server-side in `src/notes-html.js`. Semantic retrieval (LSA) is `src/semantic.js` and RAG answering is `src/ask.js`; the LSA space rebuilds automatically after each full-text index rebuild and persists to `data/semantic-index.sqlite`. The SSE event bus behind live annotation sync is `src/events.js`.
 
 ## Safety model
 

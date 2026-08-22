@@ -51,6 +51,69 @@ function ToolbarButton(props: {
   );
 }
 
+interface LibraryItem {
+  key: string;
+  title: string;
+  creators: string[];
+}
+
+function LinkPicker(props: { onClose: () => void; onPick: (title: string) => void }) {
+  const [query, setQuery] = React.useState('');
+  const [results, setResults] = React.useState<LibraryItem[]>([]);
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    const term = query.trim();
+    if (!term) {
+      setResults([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const token = localStorage.getItem('web-zotero-token') || '';
+        const response = await fetch(`/api/items?q=${encodeURIComponent(term)}&limit=8`, {
+          headers: token ? { authorization: `Bearer ${token}` } : {},
+        });
+        const payload = await response.json().catch(() => ({ items: [] }));
+        if (!cancelled) setResults(payload.items || []);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
+
+  return (
+    <div className="link-picker" data-testid="link-picker">
+      <input
+        type="search"
+        autoFocus
+        placeholder="Search your library…"
+        value={query}
+        onChange={event => setQuery(event.target.value)}
+      />
+      {loading && <div className="link-picker-status">Searching…</div>}
+      {!loading && query && results.length === 0 && <div className="link-picker-status">No matching items.</div>}
+      <ul>
+        {results.map(item => (
+          <li key={item.key}>
+            <button type="button" onClick={() => props.onPick(item.title)}>
+              <span className="link-picker-title">{item.title}</span>
+              <span className="link-picker-meta">{item.creators.join(', ')}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <button type="button" className="link-picker-close" onClick={props.onClose}>Close</button>
+    </div>
+  );
+}
+
 function NotesApp() {
   const params = new URLSearchParams(window.location.search);
   const itemKey = params.get('item') || '';
@@ -59,6 +122,7 @@ function NotesApp() {
   const [status, setStatus] = React.useState('Loading…');
   const [saving, setSaving] = React.useState(false);
   const [wordCount, setWordCount] = React.useState(0);
+  const [linkPickerOpen, setLinkPickerOpen] = React.useState(false);
 
   const editor = useEditor({
     extensions: [StarterKit.configure({
@@ -142,6 +206,15 @@ function NotesApp() {
           {saving ? 'Saving…' : 'Save (Ctrl+S)'}
         </button>
       </header>
+      {linkPickerOpen && editor && (
+        <LinkPicker
+          onClose={() => setLinkPickerOpen(false)}
+          onPick={title => {
+            editor.chain().focus().insertContentAt(editor.state.selection.to, { type: 'text', text: ` [[${title}]] ` }).run();
+            setLinkPickerOpen(false);
+          }}
+        />
+      )}
       {editor && (
         <div className="notes-toolbar" role="toolbar" aria-label="Formatting">
           <ToolbarButton label="B" title="Bold" active={editor.isActive('bold')}
@@ -168,6 +241,8 @@ function NotesApp() {
               if (href) editor.chain().focus().setLink({ href }).run();
               else editor.chain().focus().unsetLink().run();
             }} />
+          <ToolbarButton label="🔗" title="Insert link to a library item ([[title]])"
+            onClick={() => setLinkPickerOpen(open => !open)} />
           <ToolbarButton label="↺" title="Undo" disabled={!editor.can().undo()}
             onClick={() => editor.chain().focus().undo().run()} />
           <ToolbarButton label="↻" title="Redo" disabled={!editor.can().redo()}
