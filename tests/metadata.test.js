@@ -229,3 +229,11 @@ test('crossrefMessageToCsl maps types and cleans page ranges', () => {
   assert.equal(csl.page, '10-20');
   assert.deepEqual(csl.author, [{ given: '', family: '', literal: 'ACM' }]);
 });
+
+test('cslJsonToItem strips JATS markup from doi.org abstracts', () => {
+  const item = cslJsonToItem({
+    id: 'x', type: 'article-journal', title: 'A',
+    abstract: '<jats:title>Abstract</jats:title> <jats:p>Proteins are <jats:sup>1–4</jats:sup> essential.</jats:p>'
+  });
+  assert.equal(item.fields.abstractNote, 'Abstract Proteins are 1–4 essential.');
+});

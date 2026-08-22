@@ -17,8 +17,8 @@ A lightweight, remotely accessible web companion for an existing local Zotero 7 
 - Desktop annotations browsing plus Markdown/CSV export.
 - Lexical related-paper recommendations and service health reporting.
 - Interactive PDF annotator (React + PDF.js) at `/annotator` with viewport-normalized highlights, floating color/note toolbar, and a jump-to-page annotation sidebar; annotations sync to the server and mirror to localStorage offline; export as Markdown. Run `npm run build:annotator` after installing dev dependencies.
-- Metadata ingestion API: paste a DOI, arXiv ID, ISBN or BibTeX and get normalized item metadata (`POST /api/metadata/resolve`), with DOI content negotiation and Crossref fallback.
-- CSL citation engine (`POST /api/citations/format`, `GET /api/citations/styles`): citeproc-js with bundled `apa`, `ieee`, `nature`, `gb-t-7714-2015` styles and `en-US`/`zh-CN` locales, plus a graceful fallback formatter.
+- Metadata ingestion API: paste a DOI, arXiv ID, ISBN or BibTeX and get normalized item metadata (`POST /api/metadata/resolve`), with DOI content negotiation and Crossref fallback. The sidebar "Fetch" box runs it from the UI and renders a metadata card with a live citation preview.
+- CSL citation engine (`POST /api/citations/format`, `GET /api/citations/styles`): citeproc-js with bundled `apa`, `ieee`, `nature`, `gb-t-7714-2015` styles and `en-US`/`zh-CN` locales, plus a graceful fallback formatter. Item detail and the lookup card share a citation panel with style/language/mode switching and one-click copy.
 
 See `ARCHITECTURE.md` for the full architecture blueprint (stack rationale, data flow, API spec, roadmap) and `db/schema.sql` for the PostgreSQL schema of the multi-user build.
 

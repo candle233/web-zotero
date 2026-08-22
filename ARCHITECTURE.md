@@ -140,6 +140,7 @@ Web Zotero 是本地 Zotero 文献库的远程网页伴侣系统：在电脑与�
 | R7a 协作基础（本轮） | 多用户 + 富文本 + 批注持久化（零依赖 SQLite 形态） | users/sessions/角色（scrypt + 令牌哈希）、`/api/users` 管理、TipTap 富文本笔记（`/notes` + 服务端净化）、`/api/annotations` 归一化批注持久化（作者/权限）、批注器同步服务端、CLI `npm run add-user` | ✅ |
 | R7b 协作版基础设施 | 按 `db/schema.sql` 迁移 PG + Prisma、S3/MinIO 预签名直传、多用户工作区隔离（workspace_members） | 计划 |
 | R8a 语义检索（本轮） | 零依赖本地形态 | `src/semantic.js`：中英文分词（拉丁词 + CJK 二元组）→ 分块 TF-IDF → 子空间迭代截断 SVD（k=64，确定性种子）→ 语义空间持久化 `data/semantic-index.sqlite`；`/api/search?mode=lexical\|semantic\|hybrid`（bm25 × LSA 余弦归一化混合）、related 升级为混合排序、`POST /api/ai/ask` RAG 问答（LSA+词面混合检索 → OpenAI 生成 / 本地抽取式降级）；随 `/api/index/rebuild` 自动重建 | ✅ |
+| R7c 元数据/引文 UI（本轮） | 管线接入界面 | 侧栏「按标识符查询」面板（DOI/arXiv/ISBN/BibTeX → 元数据卡片 + 来源徽标 + 摘要，多条目 BibTeX 批量解析）；共享 CSL 引文预览组件（样式 apa/ieee/nature/gb-t-7714-2015 × 语言 en-US/zh-CN × bibliography/in-text 切换、citeproc HTML 悬挂缩进渲染、一键复制、降级警告）；条目详情内嵌同一引文面板；doi.org JATS 摘要标记清理 | ✅ |
 | R8b 语义检索 | pgvector 嵌入、语义相关文献、AI 问答（RAG over 全文） | 依赖 R7b 的 PG 基础设施；嵌入模型 + HNSW 索引替代本地 LSA | 计划 |
 | R9 | 实时协作 | WebSocket 批注同步、CRDT 笔记、移动端手势批注优化、笔记双向链接 | 计划 |
 

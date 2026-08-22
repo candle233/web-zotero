@@ -160,3 +160,26 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   .reader-shell { grid-template-columns: 1fr; grid-template-rows: 52dvh minmax(0, 1fr); }
   .reader-side { border-left: 0; border-top: 1px solid var(--border); }
 }
+
+/* Identifier lookup + citation preview (R7b) */
+.lookup-wrap { display: flex; gap: 7px; }
+.lookup-wrap input { flex: 1; min-width: 0; }
+.lookup-wrap button { width: auto; white-space: nowrap; }
+
+.citation-controls { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin-bottom: 10px; }
+.citation-controls select {
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 13px; max-width: 46%;
+}
+.citation-controls button { width: auto; }
+.citation-warning { margin-top: 6px; }
+
+.csl-preview {
+  border-left: 3px solid var(--border);
+  padding-left: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.csl-preview .csl-entry { margin: 0 0 10px; padding-left: 1.6em; text-indent: -1.6em; }
+.csl-preview .csl-left-margin { display: inline-block; min-width: 2.2em; }

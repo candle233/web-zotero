@@ -110,6 +110,19 @@ function firstString(value) {
   return typeof value === 'string' ? value : '';
 }
 
+/**
+ * doi.org abstracts often embed JATS XML tags (<jats:p>, <jats:sup>, …).
+ * Strip them (keeping inner text) so the UI shows clean prose.
+ */
+function stripInlineMarkup(value) {
+  return firstString(value)
+    .replace(/<\/?[a-z][a-z0-9]*(?::[a-z0-9]+)?(\s[^>]*)?\/?>/gi, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function datePartsToIso(parts) {
   if (!Array.isArray(parts) || parts.length === 0) return '';
   const [year, month = 1, day = 1] = parts;
@@ -186,7 +199,7 @@ function cslJsonToItem(cslRecord) {
     title: firstString(record.title),
     creators: creatorsFromCsl(record),
     fields: {
-      abstractNote: firstString(record.abstract),
+      abstractNote: stripInlineMarkup(record.abstract),
       publicationTitle: firstString(record['container-title']),
       volume: firstString(record.volume),
       issue: firstString(record.issue),

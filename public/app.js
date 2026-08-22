@@ -11,7 +11,7 @@ const state = {
 };
 
 const elements = {};
-['searchInput','semanticToggle','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','aiResult','askInput','askButton','summarizeButton','extractTextButton','searchResults','resultCount','resultList','toast','backButton','closeSearch']
+['searchInput','semanticToggle','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','aiResult','askInput','askButton','summarizeButton','extractTextButton','searchResults','resultCount','resultList','toast','backButton','closeSearch','lookupInput','lookupButton','lookupBody','closeLookup']
   .forEach(id => { elements[id] = document.getElementById(id); });
 
 function authHeaders(extra = {}) {
@@ -203,6 +203,7 @@ function renderDetail(item) {
     actionButton('JSON metadata', () => exportItem(item, 'json'))
   );
   card.append(exportPanel);
+  card.append(buildCitationPanel({ itemKey: item.key }));
 
   if (item.tags.length) {
     const panel = document.createElement('section');
@@ -543,6 +544,184 @@ elements.backButton.addEventListener('click', () => { state.view='detail'; showV
 elements.closeSearch.addEventListener('click', () => { elements.searchInput.value=''; state.searchMode=false; elements.searchResults.classList.remove('active'); });
 elements.summarizeButton.addEventListener('click', summarize);
 elements.extractTextButton.addEventListener('click', extractText);
+elements.lookupButton.addEventListener('click', runLookup);
+elements.lookupInput.addEventListener('keydown', event => { if (event.key === 'Enter') runLookup(); });
+elements.closeLookup.addEventListener('click', () => { state.view = 'detail'; showView('detail'); });
+
+// ---------------------------------------------------------------------------
+// Metadata lookup by identifier (DOI / arXiv / ISBN / BibTeX)
+// ---------------------------------------------------------------------------
+let citationStylesCache = null;
+function citationStyles() {
+  if (!citationStylesCache) citationStylesCache = request('/api/citations/styles').catch(() => null);
+  return citationStylesCache;
+}
+
+async function runLookup() {
+  const input = elements.lookupInput.value.trim();
+  if (!input) { showToast('Paste a DOI, arXiv ID, ISBN or BibTeX first.'); return; }
+  elements.lookupButton.disabled = true;
+  elements.lookupBody.innerHTML = '<p class="muted">Resolving identifier…</p>';
+  state.view = 'lookup';
+  showView('lookup');
+  elements.detailTitle.textContent = 'Metadata lookup';
+  try {
+    const result = await request('/api/metadata/resolve', { method: 'POST', body: JSON.stringify({ input }) });
+    renderLookupResult(result);
+  } catch (error) {
+    elements.lookupBody.innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+  } finally {
+    elements.lookupButton.disabled = false;
+  }
+}
+
+function renderLookupResult(result) {
+  const item = result.item;
+  const body = document.createElement('div');
+  body.className = 'detail-card';
+  const source = document.createElement('p');
+  source.className = 'muted';
+  source.textContent = `Source: ${result.source}${result.identifier ? ` · ${result.identifierType}: ${result.identifier}` : ''}`;
+  const title = document.createElement('h2');
+  title.textContent = item.title || '(untitled)';
+  const authors = document.createElement('p');
+  authors.className = 'authors';
+  authors.textContent = item.creators.map(person =>
+    [person.firstName, person.lastName].filter(Boolean).join(' ') || person.name).join(', ') || 'No authors listed';
+  const grid = document.createElement('div');
+  grid.className = 'meta-grid';
+  const fieldLabels = [
+    ['Type', item.itemType], ['Publication', item.fields.publicationTitle], ['Publisher', item.fields.publisher],
+    ['Date', item.fields.date], ['Volume', item.fields.volume], ['Issue', item.fields.issue],
+    ['Pages', item.fields.pages], ['DOI', item.fields.DOI], ['URL', item.fields.url],
+    ['ISSN', item.fields.ISSN], ['ISBN', item.fields.ISBN], ['Language', item.fields.language]
+  ];
+  for (const [label, value] of fieldLabels) if (value) grid.append(metaCard(label, value));
+  body.append(source, title, authors, grid);
+
+  const records = result.cslRecords && result.cslRecords.length > 1 ? result.cslRecords : [result.csl];
+  if (records.length > 1) {
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = `${records.length} BibTeX entries parsed — showing the first below; the citation panel formats all of them.`;
+    body.append(note);
+  }
+  if (item.fields.abstractNote) {
+    const panel = document.createElement('section');
+    panel.className = 'panel';
+    panel.innerHTML = '<h3>Abstract</h3>';
+    const text = document.createElement('p');
+    text.textContent = item.fields.abstractNote.slice(0, 4000);
+    panel.append(text);
+    body.append(panel);
+  }
+  body.append(buildCitationPanel({ cslItems: records }));
+  const hint = document.createElement('p');
+  hint.className = 'muted';
+  hint.textContent = 'This library is a read-only companion to desktop Zotero — resolved metadata is shown here for reference and citation.';
+  body.append(hint);
+  elements.lookupBody.innerHTML = '';
+  elements.lookupBody.append(body);
+}
+
+// ---------------------------------------------------------------------------
+// Shared CSL citation preview panel (used by item detail and lookup)
+// ---------------------------------------------------------------------------
+function buildCitationPanel({ itemKey = null, cslItems = null }) {
+  const panel = document.createElement('section');
+  panel.className = 'panel citation-panel';
+  panel.innerHTML = '<h3>Citation preview</h3>';
+  const controls = document.createElement('div');
+  controls.className = 'citation-controls';
+  const styleSelect = document.createElement('select');
+  styleSelect.className = 'citation-style';
+  const langSelect = document.createElement('select');
+  langSelect.className = 'citation-lang';
+  for (const [value, label] of [['en-US', 'English (en-US)'], ['zh-CN', '中文 (zh-CN)']]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    langSelect.append(option);
+  }
+  const modeSelect = document.createElement('select');
+  modeSelect.className = 'citation-mode';
+  for (const [value, label] of [['bibliography', 'Bibliography'], ['in-text', 'In-text']]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    modeSelect.append(option);
+  }
+  const copyButton = document.createElement('button');
+  copyButton.className = 'ghost';
+  copyButton.textContent = 'Copy';
+  controls.append(styleSelect, langSelect, modeSelect, copyButton);
+  const preview = document.createElement('div');
+  preview.className = 'csl-preview';
+  preview.innerHTML = '<span class="muted">Loading styles…</span>';
+  const warning = document.createElement('p');
+  warning.className = 'muted citation-warning';
+  warning.hidden = true;
+  panel.append(controls, preview, warning);
+
+  let lastPlain = '';
+  let requestId = 0;
+  async function refresh() {
+    const payload = {
+      style: styleSelect.value || 'apa',
+      lang: langSelect.value,
+      mode: modeSelect.value
+    };
+    if (itemKey) payload.itemKey = itemKey;
+    else payload.items = cslItems;
+    const currentRequestId = ++requestId;
+    try {
+      const result = await request('/api/citations/format', { method: 'POST', body: JSON.stringify(payload) });
+      if (currentRequestId !== requestId) return; // a newer request superseded this one
+      preview.innerHTML = result.entries.map(entry => entry.html).join('');
+      lastPlain = result.entries.map(entry => entry.html.replace(/<[^>]+>/g, '')).join('\n\n');
+      warning.textContent = result.warning || (result.engine === 'fallback' ? 'Using the simplified fallback formatter.' : '');
+      warning.hidden = !warning.textContent;
+    } catch (error) {
+      if (currentRequestId !== requestId) return;
+      preview.innerHTML = `<span class="muted">${escapeHtml(error.message)}</span>`;
+      lastPlain = '';
+    }
+  }
+
+  copyButton.addEventListener('click', async () => {
+    if (!lastPlain) { showToast('Nothing to copy yet.'); return; }
+    try {
+      await navigator.clipboard.writeText(lastPlain);
+      showToast('Citation copied');
+    } catch {
+      const helper = document.createElement('textarea');
+      helper.value = lastPlain;
+      document.body.append(helper);
+      helper.select();
+      document.execCommand('copy');
+      helper.remove();
+      showToast('Citation copied');
+    }
+  });
+
+  citationStyles().then(styles => {
+    if (!styles || !styles.styles.length) {
+      styleSelect.innerHTML = '<option value="apa">APA</option>';
+    } else {
+      styleSelect.innerHTML = '';
+      for (const style of styles.styles) {
+        const option = document.createElement('option');
+        option.value = style.id;
+        option.textContent = style.title;
+        if (style.id === 'apa') option.selected = true;
+        styleSelect.append(option);
+      }
+    }
+    refresh();
+  });
+  for (const control of [styleSelect, langSelect, modeSelect]) control.addEventListener('change', refresh);
+  return panel;
+}
 
 (async function init() {
   try {

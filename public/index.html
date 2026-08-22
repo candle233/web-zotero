@@ -29,6 +29,10 @@
             <input type="checkbox" id="semanticToggle"> 语义
           </label>
         </div>
+        <div class="lookup-wrap">
+          <input id="lookupInput" type="text" placeholder="DOI / arXiv / ISBN / BibTeX" autocomplete="off" title="Fetch publication metadata by identifier">
+          <button id="lookupButton" class="ghost">Fetch</button>
+        </div>
         <select id="collectionSelect" aria-label="Filter by collection"></select>
         <div class="button-row">
           <button id="searchButton" class="ghost">Refresh</button>
@@ -61,6 +65,13 @@
               <div id="aiResult" class="ai-result"></div>
             </aside>
           </div>
+        </section>
+        <section id="lookupView" class="view lookup-view">
+          <div class="search-header">
+            <h2>Metadata lookup</h2>
+            <button id="closeLookup" class="ghost">Close</button>
+          </div>
+          <div id="lookupBody" class="detail-card"></div>
         </section>
         <section id="searchResults" class="view search-results">
           <div class="search-header">
