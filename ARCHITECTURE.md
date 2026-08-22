@@ -10,7 +10,7 @@ Web Zotero 是本地 Zotero 文献库的远程网页伴侣系统：在电脑与�
 | --- | --- | --- | --- |
 | 前端框架 | Next.js (React) + TypeScript + Tailwind CSS + Radix UI | 现代化 UI、强类型、SSR/SSG 性能、Radix 提供无障碍组件原语 | 当前为零构建 vanilla JS + PWA（`public/`），PDF 批注组件已按 React + TS 实现（`src/pdf/`），可通过 esbuild 产物渐进接入 |
 | PDF 引擎 | PDF.js + 自定义 Canvas/TextLayer + 归一化批注覆盖层 | 性能稳定，坐标映射完全可控，批注样式可定制 | `src/pdf/PdfAnnotationViewer.tsx` 已实现（pdfjs-dist） |
-| 富文本笔记 | TipTap / Lexical | 块级编辑、双向链接文献与批注引用 | 当前为纯文本笔记（`/api/items/:key/notes`），TipTap 列入 Roadmap R7 |
+| 富文本笔记 | TipTap / Lexical | 块级编辑、双向链接文献与批注引用 | TipTap 已接入（R7）：`/notes` 富文本编辑页（`src/notes/notes-entry.tsx`），服务端白名单净化（`src/notes-html.js`）+ `web_notes.content_html` 列；双向链接/批注引用待 R9 |
 | 元数据与引文 | citeproc-js + CSL 样式生态（Citation.js 可选） | 兼容 Zotero 庞大的 CSL 样式库；DOI 内容协商直接获取 CSL-JSON | `src/metadata.js`（DOI/arXiv/BibTeX/ISBN 解析 + CSL-JSON 双向转换）与 `src/citation-service.js`（citeproc-js，apa/ieee/nature/gb-t-7714-2015 × en-US/zh-CN，含降级格式化器） |
 | 后端 | Node.js（原生 `node:http`，演进至 Next.js API Routes / Fastify） | 零依赖、单进程、SQLite 直读本地 Zotero 库；规模扩大后按模块拆分 | `src/server.js` |
 | 数据库 | PostgreSQL + Prisma/Drizzle（生产）；SQLite（单机只读伴侣） | 强事务、JSONB、内置 FTS（tsvector/GIN）与 pgvector 语义检索 | 目标 Schema 见 `db/schema.sql`；当前直读 Zotero SQLite + 自建 FTS 索引（`src/search.js`） |
@@ -106,6 +106,20 @@ Web Zotero 是本地 Zotero 文献库的远程网页伴侣系统：在电脑与�
 | GET | `/api/citations/styles` | `{styles: [{id, title, locales}], locales}` |
 | POST | `/api/citations/format` | `{items: InternalItem[]\|CSL-JSON[], style: "apa"\|"ieee"\|"nature"\|"gb-t-7714-2015", lang: "en-US"\|"zh-CN", mode: "bibliography"\|"in-text"}` → `{engine, style, lang, entries: [{id, html}]}` |
 
+### R7 新增（本地多用户协作形态，零依赖 SQLite）
+| 方法 | 路由 | 请求 → 响应 / 说明 |
+| --- | --- | --- |
+| POST | `/api/auth` | 多用户：`{email, password}` → `{token, user}`（30 天有效，SHA-256 哈希存储）；单密码模式：`{password}` → `{ok, token}` |
+| GET | `/api/me` | 当前主体：`{mode: "users"\|"legacy"\|"open", user: {email, displayName, role}\|null}` |
+| GET/POST | `/api/users` | owner 专用：列出 / 创建账户（scrypt 密码，首账户强制 owner） |
+| PATCH/DELETE | `/api/users/:id` | owner 专用：改角色/密码（末位 owner 保护 409）、软删除（吊销会话） |
+| GET | `/api/annotations?itemKey=&attachmentKey=` | Web 批注列表（含作者邮箱，按页码排序） |
+| POST | `/api/annotations` | `{itemKey, attachmentKey, pageIndex, rects, color?, comment?, quote?}` → 归一化坐标校验/夹取后落库，作者=当前用户 |
+| PATCH/DELETE | `/api/annotations/:id` | 作者或 owner 可改颜色/备注、可删除；他人 403 |
+| GET/POST | `/api/items/:key/notes` | POST 新增 `{html}` 富文本载荷：服务端白名单净化（`src/notes-html.js`）后存 `content_html`，同时维护纯文本列 |
+
+角色门禁：`owner > editor > viewer`；viewer 仅读（含只读 POST：metadata/resolve、citations/format、ai/summarize），写操作 403；用户管理仅 owner。
+
 ### 目标架构追加（团队版，见 db/schema.sql）
 `/api/workspaces`、`/api/workspaces/:id/members`、`/api/attachments/:id/upload-url`（预签名直传）、`/api/annotations`（POST 归一化坐标批注 `rects_json`）、`/api/items/batch-import`（BibTeX/RIS 批量）。
 
@@ -121,9 +135,10 @@ Web Zotero 是本地 Zotero 文献库的远程网页伴侣系统：在电脑与�
 | R4 | 批注 | 桌面批注浏览与 Markdown/CSV 导出 | ✅ |
 | R5 | 智能 | 相关文献推荐、AI 摘要（OpenAI + 本地降级）、离线副本/PWA | ✅ |
 | R6 | 规格化交付（本轮） | 架构蓝图、PostgreSQL Schema、PDF.js 归一化批注组件、DOI/arXiv/BibTeX 元数据管线 + citeproc-js 引文服务 | ✅ |
-| R7 | 协作版 | 按 `db/schema.sql` 迁移 PG + Prisma、S3/MinIO 预签名直传、多用户工作区、TipTap 富文本笔记 | 计划 |
+| R7a 协作基础（本轮） | 多用户 + 富文本 + 批注持久化（零依赖 SQLite 形态） | users/sessions/角色（scrypt + 令牌哈希）、`/api/users` 管理、TipTap 富文本笔记（`/notes` + 服务端净化）、`/api/annotations` 归一化批注持久化（作者/权限）、批注器同步服务端、CLI `npm run add-user` | ✅ |
+| R7b 协作版基础设施 | 按 `db/schema.sql` 迁移 PG + Prisma、S3/MinIO 预签名直传、多用户工作区隔离（workspace_members） | 计划 |
 | R8 | 语义检索 | pgvector 嵌入、语义相关文献、AI 问答（RAG over 全文） | 计划 |
-| R9 | 实时协作 | WebSocket 批注同步、CRDT 笔记、移动端手势批注优化 | 计划 |
+| R9 | 实时协作 | WebSocket 批注同步、CRDT 笔记、移动端手势批注优化、笔记双向链接 | 计划 |
 
 ---
 
@@ -135,6 +150,7 @@ Web Zotero 是本地 Zotero 文献库的远程网页伴侣系统：在电脑与�
 
 ## 7. 安全基线
 
-- `WEB_PASSWORD` 环境变量启用 Bearer 认证（不设置则仅限本机使用）。
+- 认证三形态（R7）：`users`（每人账户：scrypt 密码哈希 + 30 天 Bearer 会话令牌，库中只存令牌 SHA-256）、`legacy`（共享 `WEB_PASSWORD`，owner 权限）、`open`（未配置凭据，仅限可信网络）；角色门禁 owner/editor/viewer，末位 owner 删除/降级保护。
+- 富文本笔记服务端白名单净化（`src/notes-html.js`）：危险元素整块移除、未知标签解包、除校验后的 `<a href>` 外属性全清，前端渲染仍按文本处理。
 - 静态文件路径穿越防护（`serveFile` 前缀校验）、`X-Content-Type-Options: nosniff`、JSON 端点 `Cache-Control: no-store`。
 - 对外上游调用（doi.org/Crossref/arXiv/OpenLibrary/OpenAI）均设超时与错误包裹，失败降级、不阻塞主流程。

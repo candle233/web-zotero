@@ -10,14 +10,19 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test tests/local-ai.test.js tests/recommend.test.js tests/metadata.test.js tests/citation-service.test.js && node --test tests/coordinates.test.ts && tsc -p tsconfig.json",
+    "test": "node --test tests/local-ai.test.js tests/recommend.test.js tests/metadata.test.js tests/citation-service.test.js tests/users.test.js tests/annotations-store.test.js tests/notes-html.test.js && node --test tests/coordinates.test.ts && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json",
-    "build:annotator": "node scripts/build-annotator.js"
+    "build:annotator": "node scripts/build-annotator.js",
+    "build:notes": "node scripts/build-notes.js",
+    "add-user": "node scripts/add-user.js"
   },
   "engines": {
     "node": ">=22.5.0"
   },
   "devDependencies": {
+    "@tiptap/pm": "^3.30.2",
+    "@tiptap/react": "^3.30.2",
+    "@tiptap/starter-kit": "^3.30.2",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",

@@ -1,0 +1,123 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #1f2430;
+  --muted: #6b7280;
+  --accent: #7a2f2f;
+  --border: #e2e5ea;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+.notes-app { max-width: 860px; margin: 0 auto; padding: 16px 16px 48px; }
+
+.notes-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.notes-back { color: var(--accent); text-decoration: none; font-size: 14px; white-space: nowrap; }
+.notes-title {
+  font-size: 18px;
+  margin: 0;
+  flex: 1;
+  min-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notes-status { color: var(--muted); font-size: 13px; }
+.notes-save {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.notes-save:disabled { opacity: 0.6; cursor: default; }
+
+.notes-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px 10px 0 0;
+  padding: 8px;
+}
+
+.ntb {
+  min-width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 14px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.ntb:hover { background: #eef0f4; }
+.ntb.active { background: #e7e0e0; border-color: var(--accent); }
+.ntb:disabled { opacity: 0.4; cursor: default; }
+
+.notes-body {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  padding: 20px 24px;
+  min-height: 420px;
+}
+
+.notes-document { outline: none; min-height: 380px; font-size: 15px; line-height: 1.7; }
+.notes-document h2 { font-size: 20px; margin: 18px 0 8px; }
+.notes-document h3 { font-size: 17px; margin: 14px 0 6px; }
+.notes-document blockquote {
+  margin: 10px 0;
+  padding: 4px 14px;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+}
+.notes-document pre {
+  background: #f1f3f6;
+  border-radius: 8px;
+  padding: 10px 14px;
+  overflow-x: auto;
+  font-size: 13px;
+}
+.notes-document code { background: #f1f3f6; border-radius: 4px; padding: 1px 5px; font-size: 13px; }
+.notes-document pre code { background: transparent; padding: 0; }
+.notes-document a { color: var(--accent); }
+.notes-document p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--muted);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.notes-footer {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 10px;
+  text-align: center;
+}
+
+.notes-error { color: #b42318; padding: 24px; text-align: center; }
+
+@media (max-width: 640px) {
+  .notes-app { padding: 10px 10px 40px; }
+  .notes-body { padding: 14px; }
+}

@@ -20,6 +20,9 @@ const { recommend } = require('./recommend');
 const { OfflineLibrary } = require('./offline');
 const { resolveIdentifier } = require('./metadata');
 const { formatCitations, listStyles } = require('./citation-service');
+const { UserStore } = require('./users');
+const { WebAnnotationStore } = require('./annotations-store');
+const { sanitizeNoteHtml, noteHtmlToPlainText } = require('./notes-html');
 
 const PORT = Number(process.env.PORT || 8420);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -43,8 +46,42 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const zoteroDatabase = new ZoteroDatabase();
 const searchIndex = new SearchIndex(DATA_DIR, zoteroDatabase);
 const webStore = new WebStore(DATA_DIR);
+const userStore = new UserStore(DATA_DIR);
+const annotationStore = new WebAnnotationStore(DATA_DIR);
 const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore });
 const offlineLibrary = new OfflineLibrary(DATA_DIR);
+
+const ROLE_RANK = { viewer: 0, editor: 1, owner: 2 };
+// POST endpoints that compute without mutating anything; viewers may call them.
+const READ_ONLY_POST_ROUTES = new Set([
+  '/api/auth', '/api/metadata/resolve', '/api/citations/format', '/api/ai/summarize'
+]);
+
+function authMode() {
+  const users = userStore.count();
+  return { mode: users > 0 ? 'users' : (WEB_PASSWORD ? 'legacy' : 'open'), users };
+}
+
+/**
+ * Resolves the request principal across the three auth modes:
+ *   users  – per-user session tokens (UserStore), optional operator password;
+ *   legacy – single shared WEB_PASSWORD (owner role);
+ *   open   – no credentials configured, trusted network only.
+ */
+function resolvePrincipal(request, url) {
+  const authorization = request.headers.authorization || '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : url.searchParams.get('token');
+  const mode = authMode();
+  if (token) {
+    const user = userStore.resolveToken(token);
+    if (user) return { kind: 'user', user, role: user.role, token };
+    if (WEB_PASSWORD && token === WEB_PASSWORD) return { kind: 'legacy', user: null, role: 'owner', token };
+    if (mode.mode === 'open') return { kind: 'open', user: null, role: 'owner' };
+    return null;
+  }
+  if (mode.mode === 'open') return { kind: 'open', user: null, role: 'owner' };
+  return null;
+}
 
 function sendJson(response, status, payload) {
   const body = JSON.stringify(payload);
@@ -137,12 +174,18 @@ function normalizeCreators(creators) {
 
 async function handleApi(request, response, url) {
   const pathname = url.pathname;
-  if (request.method !== 'GET' && request.method !== 'POST') return sendJson(response, 405, { error: 'Method not allowed' });
+  if (!['GET', 'POST', 'PATCH', 'DELETE'].includes(request.method)) {
+    return sendJson(response, 405, { error: 'Method not allowed' });
+  }
 
-  if (WEB_PASSWORD && pathname !== '/api/auth') {
-    const authorization = request.headers.authorization || '';
-    const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : url.searchParams.get('token');
-    if (token !== WEB_PASSWORD) return sendJson(response, 401, { error: 'Unauthorized', auth: true });
+  const principal = resolvePrincipal(request, url);
+  if (!principal && pathname !== '/api/auth') {
+    return sendJson(response, 401, { error: 'Unauthorized', auth: true, mode: authMode().mode });
+  }
+  const effective = principal || { kind: 'anonymous', user: null, role: 'viewer' };
+  if (request.method !== 'GET' && !READ_ONLY_POST_ROUTES.has(pathname)
+      && ROLE_RANK[effective.role] < ROLE_RANK.editor) {
+    return sendJson(response, 403, { error: `Your role (${effective.role}) is read-only.` });
   }
 
   if (pathname === '/api/items' && request.method === 'GET') {
@@ -199,6 +242,10 @@ async function handleApi(request, response, url) {
     const itemKey = decodeURIComponent(pathname.split('/')[3]);
     if (request.method === 'GET') return sendJson(response, 200, webStore.getNote(itemKey));
     const body = await readJson(request);
+    if (typeof body.html === 'string') {
+      const html = sanitizeNoteHtml(body.html.slice(0, 210000));
+      return sendJson(response, 200, webStore.saveNote(itemKey, noteHtmlToPlainText(html), html));
+    }
     return sendJson(response, 200, webStore.saveNote(itemKey, String(body.content || '').slice(0, 200000)));
   }
 
@@ -364,11 +411,92 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/api/auth' && request.method === 'POST') {
     const body = await readJson(request);
-    if (!WEB_PASSWORD || body.password !== WEB_PASSWORD) return sendJson(response, 401, { error: 'Invalid password', auth: true });
-    return sendJson(response, 200, { ok: true });
+    const mode = authMode();
+    if (typeof body.email === 'string' && body.email.trim()) {
+      const user = userStore.authenticate(body.email, body.password);
+      return sendJson(response, 200, { token: userStore.issueToken(user), user });
+    }
+    if (mode.mode === 'users') {
+      return sendJson(response, 401, { error: 'Email and password are required.', auth: true, mode: mode.mode });
+    }
+    if (!WEB_PASSWORD || body.password !== WEB_PASSWORD) {
+      return sendJson(response, 401, { error: 'Invalid password', auth: true, mode: mode.mode });
+    }
+    return sendJson(response, 200, { ok: true, token: WEB_PASSWORD, user: { role: 'owner' } });
   }
 
-  if (pathname === '/api/health') return sendJson(response, 200, health.status());
+  if (pathname === '/api/me' && request.method === 'GET') {
+    return sendJson(response, 200, {
+      mode: authMode().mode,
+      user: effective.user
+        ? { email: effective.user.email, displayName: effective.user.displayName, role: effective.user.role }
+        : null
+    });
+  }
+
+  if (pathname === '/api/users' && request.method === 'GET') {
+    if (ROLE_RANK[effective.role] < ROLE_RANK.owner) return sendJson(response, 403, { error: 'Owner role required.' });
+    return sendJson(response, 200, { users: userStore.listUsers() });
+  }
+
+  if (pathname === '/api/users' && request.method === 'POST') {
+    if (ROLE_RANK[effective.role] < ROLE_RANK.owner) return sendJson(response, 403, { error: 'Owner role required.' });
+    const body = await readJson(request);
+    return sendJson(response, 201, { user: userStore.createUser(body) });
+  }
+
+  if (/^\/api\/users\/\d+$/.test(pathname)) {
+    if (ROLE_RANK[effective.role] < ROLE_RANK.owner) return sendJson(response, 403, { error: 'Owner role required.' });
+    const userId = Number(pathname.split('/')[3]);
+    if (request.method === 'PATCH') {
+      const body = await readJson(request);
+      return sendJson(response, 200, { user: userStore.updateUser(userId, body) });
+    }
+    if (request.method === 'DELETE') return sendJson(response, 200, userStore.deleteUser(userId));
+  }
+
+  if (pathname === '/api/annotations' && request.method === 'GET') {
+    const itemKey = url.searchParams.get('itemKey');
+    if (!itemKey) return sendJson(response, 400, { error: 'Query parameter "itemKey" is required.' });
+    return sendJson(response, 200, {
+      annotations: annotationStore.list({ itemKey, attachmentKey: url.searchParams.get('attachmentKey') || undefined })
+    });
+  }
+
+  if (pathname === '/api/annotations' && request.method === 'POST') {
+    const body = await readJson(request);
+    if (!zoteroDatabase.itemDetail(String(body.itemKey || ''))) {
+      return sendJson(response, 404, { error: 'Item not found' });
+    }
+    return sendJson(response, 201, {
+      annotation: annotationStore.create({
+        itemKey: body.itemKey,
+        attachmentKey: body.attachmentKey,
+        authorId: effective.user ? effective.user.id : null,
+        pageIndex: body.pageIndex,
+        pageLabel: body.pageLabel,
+        type: body.type,
+        rects: body.rects,
+        color: body.color,
+        comment: body.comment,
+        quote: body.quote
+      })
+    });
+  }
+
+  if (/^\/api\/annotations\/\d+$/.test(pathname)) {
+    const annotationId = Number(pathname.split('/')[3]);
+    const actor = effective.user ? { id: effective.user.id, role: effective.user.role } : null;
+    if (request.method === 'PATCH') {
+      const body = await readJson(request);
+      return sendJson(response, 200, { annotation: annotationStore.update(annotationId, body, actor) });
+    }
+    if (request.method === 'DELETE') return sendJson(response, 200, annotationStore.remove(annotationId, actor));
+  }
+
+  if (pathname === '/api/health') {
+    return sendJson(response, 200, { ...health.status(), auth: authMode() });
+  }
 
   return sendJson(response, 404, { error: 'API route not found' });
 }
@@ -386,13 +514,16 @@ async function handle(request, response) {
       '/annotator': ['annotator.html', 'text/html; charset=utf-8'],
       '/annotator.js': ['annotator.js', 'text/javascript; charset=utf-8'],
       '/annotator.css': ['annotator.css', 'text/css; charset=utf-8'],
+      '/notes': ['notes.html', 'text/html; charset=utf-8'],
+      '/notes.js': ['notes.js', 'text/javascript; charset=utf-8'],
+      '/notes.css': ['notes.css', 'text/css; charset=utf-8'],
       '/vendor/pdf.worker.min.mjs': ['vendor/pdf.worker.min.mjs', 'text/javascript; charset=utf-8', 86400]
     };
     const route = routes[url.pathname];
     if (route) return await serveFile(response, ...route);
     return sendJson(response, 404, { error: 'Not found' });
   } catch (error) {
-    console.error(error);
+    if ((error.statusCode || 500) >= 500) console.error(error);
     if (!response.headersSent) sendJson(response, error.statusCode || 500, { error: error.message || 'Internal server error' });
   }
 }
@@ -407,6 +538,8 @@ async function main() {
     console.log(`Web Zotero ready on ${PORT}`);
     for (const address of addresses) console.log(`  http://${address}`);
     console.log(`Library items: ${zoteroDatabase.items.length}; indexed documents: ${searchIndex.status().indexed}`);
+    const mode = authMode();
+    console.log(`Auth mode: ${mode.mode}${mode.mode === 'users' ? ` (${mode.users} users)` : ''}`);
   });
   setImmediate(() => searchIndex.reindex({ limit: 100000 }).then(result => {
     if (result.started) console.log(`Initial index complete: ${result.indexed} indexed, ${result.skipped} skipped`);
@@ -415,6 +548,8 @@ async function main() {
     server.close(() => {
       searchIndex.database.close();
       webStore.database.close();
+      userStore.close();
+      annotationStore.close();
       zoteroDatabase.close();
       process.exit(0);
     });

@@ -19,19 +19,28 @@ class WebStore {
         updated_at TEXT NOT NULL
       );
     `);
+    // Rich-text notes (R7): sanitized TipTap HTML alongside the plain-text column.
+    try {
+      this.database.exec('ALTER TABLE web_notes ADD COLUMN content_html TEXT');
+    } catch {
+      // Column already exists.
+    }
   }
 
   getNote(itemKey) {
-    return this.database.prepare('SELECT item_key AS itemKey, content, updated_at AS updatedAt FROM web_notes WHERE item_key = ?').get(itemKey) || { itemKey, content: '', updatedAt: null };
+    return this.database.prepare(
+      'SELECT item_key AS itemKey, content, content_html AS html, updated_at AS updatedAt FROM web_notes WHERE item_key = ?'
+    ).get(itemKey) || { itemKey, content: '', html: null, updatedAt: null };
   }
 
-  saveNote(itemKey, content) {
+  saveNote(itemKey, content, html = null) {
     const updatedAt = new Date().toISOString();
     this.database.prepare(`
-      INSERT INTO web_notes(item_key, content, updated_at) VALUES (?, ?, ?)
-      ON CONFLICT(item_key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at
-    `).run(itemKey, String(content || ''), updatedAt);
-    return { itemKey, content: String(content || ''), updatedAt };
+      INSERT INTO web_notes(item_key, content, content_html, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(item_key) DO UPDATE SET
+        content = excluded.content, content_html = excluded.content_html, updated_at = excluded.updated_at
+    `).run(itemKey, String(content || ''), html, updatedAt);
+    return { itemKey, content: String(content || ''), html, updatedAt };
   }
 
   saveProgress(itemKey, percent) {

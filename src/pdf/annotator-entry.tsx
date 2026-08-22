@@ -5,9 +5,10 @@ import type { PdfAnnotation } from './types.ts';
 
 /**
  * Browser entry for the bundled annotator page (/annotator?item=KEY&file=ATTACH).
- * Annotations are kept in localStorage keyed by attachment so they survive
- * reloads; the PostgreSQL build (db/schema.sql) replaces this with the
- * /api/annotations endpoints.
+ *
+ * R7: annotations persist server-side via /api/annotations (normalized
+ * rects, per-user authorship). localStorage stays as an offline mirror and
+ * as the fallback when the server cannot be reached.
  */
 
 const STORAGE_PREFIX = 'web-zotero-annotations:';
@@ -16,13 +17,49 @@ function storageKey(itemKey: string, attachmentKey: string): string {
   return STORAGE_PREFIX + itemKey + ':' + attachmentKey;
 }
 
-function loadAnnotations(itemKey: string, attachmentKey: string): PdfAnnotation[] {
+function readLocal(itemKey: string, attachmentKey: string): PdfAnnotation[] {
   try {
     const raw = localStorage.getItem(storageKey(itemKey, attachmentKey));
     return raw ? (JSON.parse(raw) as PdfAnnotation[]) : [];
   } catch {
     return [];
   }
+}
+
+function writeLocal(itemKey: string, attachmentKey: string, annotations: readonly PdfAnnotation[]): void {
+  try {
+    localStorage.setItem(storageKey(itemKey, attachmentKey), JSON.stringify(annotations));
+  } catch {
+    // Storage full or unavailable; the server copy is the source of truth.
+  }
+}
+
+interface ServerAnnotation {
+  id: number;
+  pageIndex: number;
+  pageLabel: string | null;
+  type: string;
+  rects: { x: number; y: number; width: number; height: number }[];
+  color: string;
+  commentText: string;
+  quoteText: string;
+  createdAt: string;
+  authorEmail: string | null;
+}
+
+function fromServer(row: ServerAnnotation): PdfAnnotation {
+  return {
+    id: `srv-${row.id}`,
+    serverId: row.id,
+    pageIndex: row.pageIndex,
+    type: (row.type === 'rect' || row.type === 'note' ? row.type : 'highlight') as PdfAnnotation['type'],
+    rects: row.rects,
+    color: row.color,
+    commentText: row.commentText || '',
+    quoteText: row.quoteText || '',
+    createdAt: row.createdAt,
+    authorEmail: row.authorEmail,
+  };
 }
 
 function annotationsToMarkdown(annotations: readonly PdfAnnotation[], title: string): string {
@@ -42,18 +79,118 @@ function AnnotatorApp() {
   const attachmentKey = params.get('file') || '';
   const title = params.get('title') || itemKey;
   const token = localStorage.getItem('web-zotero-token') || '';
-  const [annotations, setAnnotations] = React.useState<PdfAnnotation[]>(() =>
-    itemKey && attachmentKey ? loadAnnotations(itemKey, attachmentKey) : [],
+  const [annotations, setAnnotations] = React.useState<PdfAnnotation[]>([]);
+  const [syncStatus, setSyncStatus] = React.useState('Loading annotations…');
+
+  const authHeaders = React.useMemo(
+    () => ({ 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }),
+    [token],
   );
+
+  React.useEffect(() => {
+    if (!itemKey || !attachmentKey) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(
+          `/api/annotations?itemKey=${encodeURIComponent(itemKey)}&attachmentKey=${encodeURIComponent(attachmentKey)}`,
+          { headers: authHeaders },
+        );
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        const payload = (await response.json()) as { annotations: ServerAnnotation[] };
+        if (cancelled) return;
+        const loaded = payload.annotations.map(fromServer);
+        setAnnotations(loaded);
+        writeLocal(itemKey, attachmentKey, loaded);
+        setSyncStatus(`${loaded.length} annotation(s) synced`);
+      } catch {
+        if (cancelled) return;
+        setAnnotations(readLocal(itemKey, attachmentKey));
+        setSyncStatus('Offline mode — changes stay in this browser');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [itemKey, attachmentKey, authHeaders]);
 
   const persist = React.useCallback(
     (next: PdfAnnotation[]) => {
       setAnnotations(next);
-      if (itemKey && attachmentKey) {
-        localStorage.setItem(storageKey(itemKey, attachmentKey), JSON.stringify(next));
-      }
+      if (itemKey && attachmentKey) writeLocal(itemKey, attachmentKey, next);
     },
     [itemKey, attachmentKey],
+  );
+
+  const createOnServer = React.useCallback(
+    async (annotation: PdfAnnotation) => {
+      try {
+        const response = await fetch('/api/annotations', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            itemKey,
+            attachmentKey,
+            pageIndex: annotation.pageIndex,
+            type: annotation.type,
+            rects: annotation.rects,
+            color: annotation.color,
+            comment: annotation.commentText,
+            quote: annotation.quoteText,
+          }),
+        });
+        if (!response.ok) throw new Error(`${response.status}`);
+        const payload = (await response.json()) as { annotation: ServerAnnotation & { rects: typeof annotation.rects } };
+        setAnnotations(current => {
+          const next = current.map(entry =>
+            entry.id === annotation.id ? fromServer({ ...payload.annotation, rects: entry.rects }) : entry,
+          );
+          if (itemKey && attachmentKey) writeLocal(itemKey, attachmentKey, next);
+          return next;
+        });
+        setSyncStatus('Saved to server');
+      } catch {
+        setSyncStatus('Saved locally — server unreachable');
+      }
+    },
+    [itemKey, attachmentKey, authHeaders],
+  );
+
+  const updateOnServer = React.useCallback(
+    async (id: string, patch: Partial<PdfAnnotation>) => {
+      const target = annotations.find(entry => entry.id === id);
+      if (!target?.serverId) return;
+      try {
+        const response = await fetch(`/api/annotations/${target.serverId}`, {
+          method: 'PATCH',
+          headers: authHeaders,
+          body: JSON.stringify({ color: patch.color, comment: patch.commentText }),
+        });
+        if (!response.ok) throw new Error(`${response.status}`);
+        setSyncStatus('Saved to server');
+      } catch {
+        setSyncStatus('Saved locally — server unreachable');
+      }
+    },
+    [annotations, authHeaders],
+  );
+
+  const deleteOnServer = React.useCallback(
+    async (id: string) => {
+      const target = annotations.find(entry => entry.id === id);
+      if (!target?.serverId) return;
+      try {
+        const response = await fetch(`/api/annotations/${target.serverId}`, {
+          method: 'DELETE',
+          headers: authHeaders,
+        });
+        if (!response.ok) throw new Error(`${response.status}`);
+        setSyncStatus('Deleted on server');
+      } catch {
+        setSyncStatus('Deleted locally — server unreachable');
+      }
+    },
+    [annotations, authHeaders],
   );
 
   if (!itemKey || !attachmentKey) {
@@ -72,12 +209,21 @@ function AnnotatorApp() {
         httpHeaders={token ? { authorization: `Bearer ${token}` } : undefined}
         workerUrl="/vendor/pdf.worker.min.mjs"
         annotations={annotations}
-        onCreate={annotation => persist([...annotations, annotation])}
-        onUpdate={(id, patch) =>
-          persist(annotations.map(annotation => (annotation.id === id ? { ...annotation, ...patch } : annotation)))}
-        onDelete={id => persist(annotations.filter(annotation => annotation.id !== id))}
+        onCreate={annotation => {
+          persist([...annotations, annotation]);
+          void createOnServer(annotation);
+        }}
+        onUpdate={(id, patch) => {
+          persist(annotations.map(entry => (entry.id === id ? { ...entry, ...patch } : entry)));
+          void updateOnServer(id, patch);
+        }}
+        onDelete={id => {
+          persist(annotations.filter(entry => entry.id !== id));
+          void deleteOnServer(id);
+        }}
       />
       <div className="wz-export-row">
+        <span className="wz-sync-status" data-testid="sync-status">{syncStatus}</span>
         <button
           type="button"
           onClick={() => {
@@ -110,4 +256,4 @@ declare global {
     };
   }
 }
-window.__webZoteroAnnotator = { version: '1.0.0' };
+window.__webZoteroAnnotator = { version: '1.1.0' };

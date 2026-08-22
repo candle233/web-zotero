@@ -25,16 +25,31 @@ async function request(path, options = {}) {
   });
   const payload = await response.json().catch(() => ({}));
   if (response.status === 401 && payload.auth) {
-    const password = prompt('Enter the remote access password:') || '';
-    await fetch('/api/auth', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({password}) }).then(async result => {
-      if (!result.ok) throw new Error('Invalid password');
-      state.token = password;
-      localStorage.setItem('web-zotero-token', password);
-    });
+    await login(payload.mode || 'legacy');
     return request(path, options);
   }
   if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
   return payload;
+}
+
+async function login(mode) {
+  if (mode === 'users') {
+    const email = prompt('Email:') || '';
+    const password = email ? prompt('Password:') || '' : '';
+    if (!email) throw new Error('Login cancelled');
+    const result = await fetch('/api/auth', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ email, password }) });
+    const payload = await result.json().catch(() => ({}));
+    if (!result.ok) throw new Error(payload.error || 'Invalid credentials');
+    state.token = payload.token;
+    localStorage.setItem('web-zotero-token', payload.token);
+    return;
+  }
+  const password = prompt('Enter the remote access password:') || '';
+  await fetch('/api/auth', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({password}) }).then(async result => {
+    if (!result.ok) throw new Error('Invalid password');
+    state.token = password;
+    localStorage.setItem('web-zotero-token', password);
+  });
 }
 
 function setStatus(message, isError = false) {
@@ -226,6 +241,16 @@ function renderDetail(item) {
     } finally { saveNote.disabled = false; }
   });
   notePanel.append(noteArea, saveNote, noteStatus);
+  const richText = document.createElement('button');
+  richText.className = 'ghost';
+  richText.textContent = '✍️ Rich text editor';
+  richText.title = 'Open the TipTap rich-text note editor';
+  richText.style.marginLeft = '7px';
+  richText.addEventListener('click', () => {
+    const url = `/notes?item=${encodeURIComponent(item.key)}&title=${encodeURIComponent(item.title || item.key)}`;
+    window.open(url, '_blank', 'noopener');
+  });
+  notePanel.append(richText);
   request(`/api/items/${item.key}/notes`).then(note => {
     noteArea.value = note.content || '';
     if (note.updatedAt) noteStatus.textContent = `Saved ${new Date(note.updatedAt).toLocaleString()}`;
@@ -357,7 +382,9 @@ async function openReader(key, attachmentKey, fileName = '') {
     state.view = 'reader';
     showView('reader');
     elements.backButton.hidden = false;
-    elements.pdfFrame.src = `/api/items/${encodeURIComponent(key)}/files/${encodeURIComponent(attachmentKey)}#view=FitH`;
+    let pdfUrl = `/api/items/${encodeURIComponent(key)}/files/${encodeURIComponent(attachmentKey)}#view=FitH`;
+    if (state.token) pdfUrl = pdfUrl.replace('#', `?token=${encodeURIComponent(state.token)}#`);
+    elements.pdfFrame.src = pdfUrl;
     elements.detailTitle.textContent = fileName || 'PDF reader';
     elements.aiResult.innerHTML = '<span class="muted">Open a paper and run AI reading to extract its main argument.</span>';
     await restoreProgress(key);

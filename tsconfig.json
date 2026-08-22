@@ -13,5 +13,5 @@
     "isolatedModules": true,
     "types": ["node", "react", "react-dom"]
   },
-  "include": ["src/pdf/**/*.ts", "src/pdf/**/*.tsx", "tests/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts"]
 }

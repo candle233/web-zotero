@@ -14,6 +14,10 @@ export interface PdfAnnotation {
   commentText: string;
   quoteText: string;
   createdAt: string;
+  /** Server row id once the annotation is persisted via /api/annotations. */
+  serverId?: number;
+  /** Author email in multi-user mode. */
+  authorEmail?: string | null;
 }
 
 export const ANNOTATION_COLORS = ['#ffd400', '#ff6666', '#5fb236', '#2ea8e5', '#a28ae5'] as const;
