@@ -27,7 +27,7 @@ const INTERNAL_ITEM = {
 test('listStyles exposes bundled CSL styles and locales', () => {
   const { styles, locales } = listStyles();
   const ids = styles.map(style => style.id);
-  assert.deepEqual(ids.sort(), ['apa', 'gb-t-7714-2015', 'ieee', 'nature']);
+  assert.deepEqual(ids.sort(), ['apa', 'chicago-author-date', 'gb-t-7714-2015', 'ieee', 'nature']);
   assert.ok(styles.every(style => style.title.length > 0));
   assert.deepEqual(locales, ['en-US', 'zh-CN']);
 });
@@ -113,4 +113,17 @@ test('unknown styles and locales fall back to defaults without failing', () => {
   const result = formatCitations({ items: [INTERNAL_ITEM], style: 'chicago', lang: 'fr-FR' });
   assert.equal(result.style, 'apa');
   assert.equal(result.lang, 'en-US');
+});
+
+test('listStyles and formatting include the Chicago author-date style', () => {
+  const { styles } = listStyles();
+  const ids = styles.map(style => style.id).sort();
+  assert.deepEqual(ids, ['apa', 'chicago-author-date', 'gb-t-7714-2015', 'ieee', 'nature']);
+  const chicago = styles.find(style => style.id === 'chicago-author-date');
+  assert.match(chicago.title, /Chicago/i);
+
+  const result = formatCitations({ items: [INTERNAL_ITEM], style: 'chicago-author-date', lang: 'en-US' });
+  assert.equal(result.style, 'chicago-author-date');
+  assert.ok(result.entries[0].html.includes('Attention Is All You Need'));
+  if (result.engine === 'citeproc-js') assert.match(result.entries[0].html, /Vaswani/);
 });

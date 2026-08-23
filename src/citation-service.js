@@ -24,6 +24,7 @@ const STYLE_FILES = new Map([
   ['apa', 'apa.csl'],
   ['ieee', 'ieee.csl'],
   ['nature', 'nature.csl'],
+  ['chicago-author-date', 'chicago-author-date.csl'],
   ['gb-t-7714-2015', 'china-national-standard-gb-t-7714-2015-numeric.csl'],
 ]);
 const LOCALE_FILES = new Map([

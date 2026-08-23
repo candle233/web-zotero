@@ -21,6 +21,44 @@ const DOI_PATTERN = /\b(10\.\d{4,9}\/[^\s"']+)\b/i;
 const ARXIV_PATTERN = /\b(?:arxiv\s*:\s*)?(\d{4}\.\d{4,5}(?:v\d+)?)\b/i;
 const ARXIV_OLD_PATTERN = /\b(?:arxiv\s*:\s*)?([a-z-]+\/\d{7}(?:v\d+)?)\b/i;
 const ISBN_PATTERN = /\b(97[89][-\s]?\d[-\s]?[\d-\s]{8,}[\dXx]|(?=[0-9Xx-\s]{10}\b)\d[\d-\s]{8}[\dXx])\b/;
+const RIS_TAG_PATTERN = /^[A-Z][A-Z0-9]\s{1,2}-\s/m;
+
+const RIS_TYPE_TO_CSL_TYPE = new Map([
+  ['JOUR', 'article-journal'],
+  ['BOOK', 'book'],
+  ['CHAP', 'chapter'],
+  ['CONF', 'paper-conference'],
+  ['THES', 'thesis'],
+  ['RPRT', 'report'],
+  ['ELEC', 'webpage'],
+  ['DATA', 'dataset'],
+  ['UNPB', 'manuscript'],
+  ['MGZN', 'article-magazine'],
+  ['NEWS', 'article-newspaper'],
+  ['STD', 'report'],
+  ['PAT', 'patent'],
+]);
+
+const RIS_FIELD_MAP = new Map([
+  ['TI', 'title'],
+  ['T1', 'title'],
+  ['BT', 'title'],
+  ['JO', 'container-title'],
+  ['JF', 'container-title'],
+  ['T2', 'container-title'],
+  ['PB', 'publisher'],
+  ['VL', 'volume'],
+  ['IS', 'issue'],
+  ['SP', 'page'],
+  ['EP', 'page-end'],
+  ['DO', 'DOI'],
+  ['UR', 'URL'],
+  ['AB', 'abstract'],
+  ['N2', 'abstract'],
+  ['SN', 'ISSN'],
+  ['LA', 'language'],
+  ['KW', 'keyword'],
+]);
 
 const CSL_TYPE_TO_ITEM_TYPE = new Map([
   ['article-journal', 'journalArticle'],
@@ -144,6 +182,8 @@ function detectIdentifier(rawInput) {
   if (!input) return { type: 'unknown', value: '' };
   if (/^@/.test(input) && /\{\s*[^,]*,/.test(input)) return { type: 'bibtex', value: input };
   if (/\}\s*$/.test(input) && /@\w+\s*\{/.test(input)) return { type: 'bibtex', value: input };
+  // RIS record: one or more "TY  - TAG" lines, terminated by "ER  - ".
+  if (RIS_TAG_PATTERN.test(input) && /\bER\s{1,2}-/.test(input)) return { type: 'ris', value: input };
 
   const doiMatch = DOI_PATTERN.exec(input.replace(/^doi\s*:\s*/i, ''));
   if (doiMatch) return { type: 'doi', value: doiMatch[1].replace(/[.,;)]+$/, '') };
@@ -304,13 +344,63 @@ async function resolveDoi(doi, { fetchImpl, timeoutMs }) {
   } catch {
     // fall through to Crossref
   }
-  const response = await fetchWithTimeout(`https://api.crossref.org/works/${doi}`, {
-    headers: { accept: 'application/json' },
-  }, timeoutMs, doFetch);
-  if (!response.ok) throw httpError(502, `doi.org and Crossref both failed (Crossref HTTP ${response.status}).`);
-  const payload = await response.json();
-  if (!payload || !payload.message) throw httpError(502, 'Crossref response did not contain a message payload.');
-  return { record: crossrefMessageToCsl(payload.message), source: 'Crossref API fallback' };
+  try {
+    const response = await fetchWithTimeout(`https://api.crossref.org/works/${doi}`, {
+      headers: { accept: 'application/json' },
+    }, timeoutMs, doFetch);
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload && payload.message) {
+        return { record: crossrefMessageToCsl(payload.message), source: 'Crossref API fallback' };
+      }
+    }
+  } catch {
+    // fall through to Semantic Scholar
+  }
+  try {
+    const response = await fetchWithTimeout(
+      `https://api.semanticscholar.org/graph/v1/paper/DOI:${doi}?fields=title,authors,year,venue,journal,externalIds,abstract,publicationTypes,publicationDate`,
+      { headers: { accept: 'application/json' } },
+      timeoutMs,
+      doFetch,
+    );
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload && payload.title) return { record: semanticScholarToCsl(payload, doi), source: 'Semantic Scholar API fallback' };
+    }
+  } catch {
+    // give up below
+  }
+  throw httpError(502, `DOI providers all failed for ${doi} (doi.org, Crossref, Semantic Scholar).`);
+}
+
+function semanticScholarToCsl(paper, doi) {
+  const types = Array.isArray(paper.publicationTypes) ? paper.publicationTypes.map(type => String(type).toLowerCase()) : [];
+  const type = types.includes('conference') ? 'paper-conference'
+    : types.includes('review') || types.includes('journalarticle') || paper.journal ? 'article-journal'
+    : 'book' in paper ? 'document' : 'document';
+  const csl = {
+    id: paper.externalIds?.DOI || doi,
+    type,
+    title: paper.title,
+  };
+  if (Array.isArray(paper.authors) && paper.authors.length > 0) {
+    csl.author = paper.authors.map(person => {
+      const name = person.name || '';
+      const pieces = name.split(' ');
+      if (pieces.length <= 1) return { literal: name };
+      return { family: pieces[pieces.length - 1], given: pieces.slice(0, -1).join(' ') };
+    });
+  }
+  const venue = paper.journal?.name || paper.venue || '';
+  if (venue) csl['container-title'] = venue;
+  if (paper.journal?.volume) csl.volume = String(paper.journal.volume);
+  if (paper.journal?.pages) csl.page = String(paper.journal.pages);
+  if (paper.abstract) csl.abstract = paper.abstract;
+  if (paper.externalIds?.DOI) csl.DOI = paper.externalIds.DOI;
+  if (paper.year) csl.issued = { 'date-parts': [[paper.year]] };
+  if (paper.publicationDate) csl.URL = `https://www.semanticscholar.org/paper/${paper.paperId}`;
+  return csl;
 }
 
 function crossrefMessageToCsl(message) {
@@ -582,6 +672,62 @@ function parseBibtex(blob) {
 }
 
 // ---------------------------------------------------------------------------
+// RIS parsing (dependency-free)
+// ---------------------------------------------------------------------------
+function parseRisAuthors(names) {
+  return names.map(name => {
+    const cleaned = name.replace(/\s+/g, ' ').trim();
+    if (!cleaned) return null;
+    if (cleaned.includes(',')) {
+      const [last, ...rest] = cleaned.split(',');
+      return { family: last.trim(), given: rest.join(',').trim() };
+    }
+    const pieces = cleaned.split(' ');
+    if (pieces.length === 1) return { literal: pieces[0] };
+    return { family: pieces[pieces.length - 1], given: pieces.slice(0, -1).join(' ') };
+  }).filter(Boolean);
+}
+
+function parseRis(blob) {
+  const records = [];
+  let current = null;
+  for (const rawLine of String(blob || '').split(/\r?\n/)) {
+    const match = /^([A-Z][A-Z0-9])\s{1,2}-\s?(.*)$/.exec(rawLine.trim());
+    if (!match) continue;
+    const [, tag, rawValue] = match;
+    const value = rawValue.trim();
+    if (tag === 'TY') {
+      current = { id: `ris-${records.length + 1}`, type: RIS_TYPE_TO_CSL_TYPE.get(value) || 'document', author: [] };
+      continue;
+    }
+    if (tag === 'ER') {
+      if (current) records.push(current);
+      current = null;
+      continue;
+    }
+    if (!current) continue;
+    if (tag === 'AU' || tag === 'A1') {
+      if (value) current.author.push(...parseRisAuthors([value]));
+    } else if (tag === 'PY' || tag === 'Y1') {
+      const year = Number(value.match(/(\d{4})/)?.[1]);
+      if (year) current.issued = { 'date-parts': [[year]] };
+    } else if (tag === 'SP') {
+      current.page = value;
+    } else if (tag === 'EP') {
+      if (current.page && value) current.page = `${current.page}-${value}`;
+      else if (value) current.page = value;
+    } else if (tag === 'KW') {
+      current.keyword = current.keyword ? `${current.keyword}; ${value}` : value;
+    } else {
+      const cslKey = RIS_FIELD_MAP.get(tag);
+      if (cslKey && value) current[cslKey] = value;
+    }
+  }
+  if (current) records.push(current); // missing ER terminator
+  return records.filter(record => record.title || record.author.length > 0);
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 async function resolveIdentifier(rawInput, options = {}) {
@@ -595,6 +741,13 @@ async function resolveIdentifier(rawInput, options = {}) {
     if (records.length === 0) throw httpError(422, 'BibTeX input contained no parseable entries.');
     const items = records.map(cslJsonToItem);
     return { source: 'BibTeX parser', identifierType: 'bibtex', item: items[0], items, csl: records[0], cslRecords: records };
+  }
+
+  if (detected.type === 'ris') {
+    const records = parseRis(detected.value);
+    if (records.length === 0) throw httpError(422, 'RIS input contained no parseable records.');
+    const items = records.map(cslJsonToItem);
+    return { source: 'RIS parser', identifierType: 'ris', item: items[0], items, csl: records[0], cslRecords: records };
   }
 
   const resolvers = {
@@ -616,9 +769,11 @@ module.exports = {
   detectIdentifier,
   resolveIdentifier,
   parseBibtex,
+  parseRis,
   parseArxivAtom,
   cslJsonToItem,
   itemToCslJson,
   crossrefMessageToCsl,
+  semanticScholarToCsl,
   bibtexEntryToCsl,
 };

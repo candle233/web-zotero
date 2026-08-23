@@ -222,3 +222,23 @@ body {
   .wz-export-row { bottom: 10px; flex-wrap: wrap; justify-content: center; }
   .wz-sync-status { max-width: 40vw; }
 }
+
+/* Area (rect) annotation drawing mode */
+.wz-area-toggle { font-weight: 600; }
+.wz-area-toggle.wz-area-active { border-color: var(--wz-accent); color: var(--wz-accent); }
+
+.wz-area-capture {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  cursor: crosshair;
+  background: rgba(0, 0, 0, 0.02);
+}
+.wz-area-draft {
+  position: absolute;
+  border: 2px dashed var(--wz-accent);
+  background: rgba(124, 92, 255, 0.15);
+  pointer-events: none;
+}
+.wz-annotation-rect.rect { opacity: 0.25; border: 2px solid; border-radius: 4px; }
+.wz-annotation-rect.rect.wz-selected { opacity: 0.4; }

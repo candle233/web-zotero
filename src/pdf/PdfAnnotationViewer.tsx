@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { getDocument, GlobalWorkerOptions, TextLayer } from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
-import { selectionToNormalizedRects } from './coordinates.ts';
+import { selectionToNormalizedRects, viewportRectToNormalized } from './coordinates.ts';
 import type { Rect, ViewportLike } from './coordinates.ts';
 import { AnnotationLayer } from './AnnotationLayer.tsx';
 import { ANNOTATION_COLORS } from './types.ts';
@@ -61,6 +61,7 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
   const [toolbar, setToolbar] = useState<ToolbarState | null>(null);
+  const [areaMode, setAreaMode] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const loadingTaskRef = useRef<{ destroy: () => Promise<void> } | null>(null);
   const pageViewports = useRef(new Map<number, ViewportLike>());
@@ -118,6 +119,31 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
     [props.onCreate],
   );
 
+  const handleAreaSelect = useCallback(
+    async (pageIndex: number, cssRect: Rect, at: { x: number; y: number }) => {
+      const viewport = pageViewports.current.get(pageIndex);
+      if (!viewport) return;
+      const normalized = viewportRectToNormalized(cssRect, viewport);
+      if (normalized.width <= 0.002 || normalized.height <= 0.002) return; // accidental click
+      const annotation: PdfAnnotation = {
+        id: newId(),
+        pageIndex,
+        type: 'rect',
+        rects: [normalized],
+        color: ANNOTATION_COLORS[3],
+        commentText: '',
+        quoteText: '',
+        createdAt: new Date().toISOString(),
+      };
+      await props.onCreate(annotation);
+      setSelectedId(annotation.id);
+      setToolbar({ x: at.x, y: at.y, annotationId: annotation.id });
+      setAreaMode(false);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.onCreate],
+  );
+
   const locateAnnotation = useCallback((annotation: PdfAnnotation) => {
     setSelectedId(annotation.id);
     setFlashId(annotation.id);
@@ -147,6 +173,7 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
 
   const onMouseUp = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
+      if (areaMode) return; // drawing an area annotation, not selecting text
       const selection = window.getSelection();
       if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
       const range = selection.getRangeAt(0);
@@ -168,7 +195,7 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
       selection.removeAllRanges();
       void handleTextSelect(pageIndex, rects, quoteText, { x: event.clientX, y: event.clientY });
     },
-    [handleTextSelect],
+    [handleTextSelect, areaMode],
   );
 
   const sorted = sortAnnotations(annotations);
@@ -188,6 +215,15 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
           <button type="button" onClick={() => setRotation(r => (r + 270) % 360)} aria-label="Rotate left">⟲</button>
           <button type="button" onClick={() => setRotation(r => (r + 90) % 360)} aria-label="Rotate right">⟳</button>
         </div>
+        <button
+          type="button"
+          className={`wz-area-toggle${areaMode ? ' wz-area-active' : ''}`}
+          aria-pressed={areaMode}
+          title="Draw a rectangular area annotation (drag on the page)"
+          onClick={() => setAreaMode(mode => !mode)}
+        >
+          ▦ Area
+        </button>
       </header>
       <div className="wz-body">
         <div className="wz-scroll" ref={scrollRef} onMouseUp={onMouseUp} data-testid="pdf-scroll">
@@ -204,6 +240,8 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
               selectedId={selectedId}
               flashId={flashId}
               onSelect={setSelectedId}
+              areaMode={areaMode}
+              onAreaSelect={(rect, at) => void handleAreaSelect(index, rect, at)}
             />
           ))}
           {pdfDoc && pdfDoc.numPages > pageLimit && (
@@ -257,13 +295,29 @@ interface PdfPageViewProps {
   selectedId: string | null;
   flashId: string | null;
   onSelect: (id: string) => void;
+  areaMode: boolean;
+  onAreaSelect: (cssRect: Rect, at: { x: number; y: number }) => void;
 }
 
-function PdfPageView({ pdf, pageIndex, scale, rotation, viewportSink, annotations, selectedId, flashId, onSelect }: PdfPageViewProps) {
+function PdfPageView({ pdf, pageIndex, scale, rotation, viewportSink, annotations, selectedId, flashId, onSelect, areaMode, onAreaSelect }: PdfPageViewProps) {
   const [view, setView] = useState<PageViewState | null>(null);
+  const [draft, setDraft] = useState<{ origin: { x: number; y: number }; current: { x: number; y: number } } | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
+
+  const pointerLocal = (event: React.PointerEvent<HTMLDivElement>): { x: number; y: number } => {
+    const box = wrapperRef.current?.getBoundingClientRect();
+    if (!box) return { x: 0, y: 0 };
+    return { x: event.clientX - box.left, y: event.clientY - box.top };
+  };
+
+  const draftRect = (state: { origin: { x: number; y: number }; current: { x: number; y: number } }): Rect => ({
+    x: Math.min(state.origin.x, state.current.x),
+    y: Math.min(state.origin.y, state.current.y),
+    width: Math.abs(state.current.x - state.origin.x),
+    height: Math.abs(state.current.y - state.origin.y),
+  });
 
   useEffect(() => {
     if (!pdf) return;
@@ -338,6 +392,35 @@ function PdfPageView({ pdf, pageIndex, scale, rotation, viewportSink, annotation
     >
       <canvas ref={canvasRef} />
       <div ref={textLayerRef} className="wz-text-layer" />
+      {areaMode && (
+        <div
+          className="wz-area-capture"
+          data-testid="area-capture"
+          onPointerDown={event => {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            setDraft({ origin: pointerLocal(event), current: pointerLocal(event) });
+          }}
+          onPointerMove={event => {
+            if (!draft) return;
+            setDraft(state => (state ? { ...state, current: pointerLocal(event) } : state));
+          }}
+          onPointerUp={event => {
+            if (!draft) return;
+            const rect = draftRect(draft);
+            setDraft(null);
+            if (rect.width >= 8 && rect.height >= 8) {
+              onAreaSelect(rect, { x: event.clientX, y: event.clientY });
+            }
+          }}
+        >
+          {draft && (
+            <div className="wz-area-draft" style={(() => {
+              const rect = draftRect(draft);
+              return { left: rect.x, top: rect.y, width: rect.width, height: rect.height };
+            })()} />
+          )}
+        </div>
+      )}
       {view && (
         <AnnotationLayer
           viewport={view.viewport}

@@ -43,6 +43,40 @@ function exportFormats(item) {
   };
 }
 
+const RIS_TYPE_MAP = new Map([
+  ['journalArticle', 'JOUR'], ['book', 'BOOK'], ['bookSection', 'CHAP'],
+  ['conferencePaper', 'CONF'], ['thesis', 'THES'], ['report', 'RPRT'],
+  ['webpage', 'ELEC'], ['preprint', 'UNPB'], ['dataset', 'DATA'],
+]);
+
+/**
+ * RIS export: one record per item, tag-per-line, CRLF line endings per spec.
+ */
+function exportRis(item) {
+  const lines = [];
+  lines.push(`TY  - ${RIS_TYPE_MAP.get(item.itemType) || 'GEN'}`);
+  lines.push(`TI  - ${item.title || ''}`);
+  for (const person of item.creators || []) {
+    const name = person.lastName
+      ? `${person.lastName}, ${person.firstName || ''}`.replace(/,\s*$/, '')
+      : person.name || '';
+    if (name) lines.push(`AU  - ${name}`);
+  }
+  const fields = [
+    ['publicationTitle', 'JO'], ['publisher', 'PB'], ['volume', 'VL'], ['issue', 'IS'],
+    ['pages', 'SP'], ['DOI', 'DO'], ['url', 'UR'], ['ISSN', 'SN'], ['ISBN', 'SN'],
+    ['abstractNote', 'AB'], ['language', 'LA'],
+  ];
+  for (const [key, tag] of fields) {
+    if (item.fields[key]) lines.push(`${tag}  - ${item.fields[key]}`);
+  }
+  const year = (item.fields.date || '').match(/\d{4}/)?.[0];
+  if (year) lines.push(`PY  - ${year}`);
+  for (const tag of (item.tags || []).slice(0, 30)) lines.push(`KW  - ${tag}`);
+  lines.push('ER  - ');
+  return lines.join('\r\n') + '\r\n';
+}
+
 function exportJson(item) {
   return JSON.stringify({
     itemType: item.itemType,
@@ -69,4 +103,4 @@ function exportCsv(item) {
   ].map(value => `"${String(value).replace(/"/g, '""')}"`).join(',')].join('\n');
 }
 
-module.exports = { citation, exportFormats, exportCsv, exportJson };
+module.exports = { citation, exportFormats, exportCsv, exportJson, exportRis };

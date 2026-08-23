@@ -225,6 +225,7 @@ function renderDetail(item) {
   exportPanel.append(
     actionButton('APA citation', () => exportItem(item, 'txt')),
     actionButton('BibTeX', () => exportItem(item, 'bib')),
+    actionButton('RIS', () => exportItem(item, 'ris')),
     actionButton('CSV metadata', () => exportItem(item, 'csv')),
     actionButton('JSON metadata', () => exportItem(item, 'json'))
   );
