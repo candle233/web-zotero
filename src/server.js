@@ -20,6 +20,7 @@ const { annotationsToCsv, annotationsToMarkdown } = require('./annotation-export
 const { recommend } = require('./recommend');
 const { OfflineLibrary } = require('./offline');
 const { resolveIdentifier } = require('./metadata');
+const { recognizeFormula } = require('./formula-ocr');
 const { formatCitations, listStyles } = require('./citation-service');
 const { UserStore } = require('./users');
 const { WebAnnotationStore } = require('./annotations-store');
@@ -62,7 +63,8 @@ const offlineLibrary = new OfflineLibrary(DATA_DIR);
 const ROLE_RANK = { viewer: 0, editor: 1, owner: 2 };
 // POST endpoints that compute without mutating anything; viewers may call them.
 const READ_ONLY_POST_ROUTES = new Set([
-  '/api/auth', '/api/metadata/resolve', '/api/citations/format', '/api/ai/summarize', '/api/ai/ask'
+  '/api/auth', '/api/metadata/resolve', '/api/citations/format', '/api/ai/summarize', '/api/ai/ask',
+  '/api/formula-ocr'
 ]);
 
 /** Blends FTS bm25 ranking with LSA cosine ranking (both normalized to [0,1]). */
@@ -585,6 +587,16 @@ async function handleApi(request, response, url) {
       return sendJson(response, 200, result);
     } catch (error) {
       return sendJson(response, error.statusCode || 502, { error: error.message || 'Metadata resolution failed.' });
+    }
+  }
+
+  if (pathname === '/api/formula-ocr' && request.method === 'POST') {
+    const body = await readJson(request);
+    try {
+      const result = await recognizeFormula(body.image, { timeoutMs: Number(body.timeoutMs) || 30000 });
+      return sendJson(response, 200, result);
+    } catch (error) {
+      return sendJson(response, error.statusCode || 500, { error: error.message || 'Formula recognition failed.' });
     }
   }
 

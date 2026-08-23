@@ -235,6 +235,20 @@ function AnnotatorApp() {
     [annotations, authHeaders],
   );
 
+  const formulaOcr = React.useCallback(
+    async (dataUrl: string): Promise<{ latex: string }> => {
+      const response = await fetch('/api/formula-ocr', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ image: dataUrl }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
+      return payload as { latex: string };
+    },
+    [authHeaders],
+  );
+
   if (!itemKey || !attachmentKey) {
     return (
       <div className="wz-viewer">
@@ -263,6 +277,7 @@ function AnnotatorApp() {
           persist(annotations.filter(entry => entry.id !== id));
           void deleteOnServer(id);
         }}
+        onFormulaOcr={formulaOcr}
       />
       <div className="wz-export-row">
         <span className="wz-sync-status" data-testid="sync-status">{syncStatus}</span>

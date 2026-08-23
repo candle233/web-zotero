@@ -17,6 +17,12 @@ export interface PdfAnnotationViewerProps {
   onUpdate: (id: string, patch: Partial<PdfAnnotation>) => void | Promise<void>;
   onDelete: (id: string) => void | Promise<void>;
   onDocumentLoaded?: (info: { pages: number }) => void;
+  /**
+   * Formula OCR (R10): receives a cropped PNG data URL of the region the
+   * user dragged in formula mode, resolves to recognized LaTeX. Provided by
+   * the entry point (it owns auth + the /api/formula-ocr call).
+   */
+  onFormulaOcr?: (dataUrl: string) => Promise<{ latex: string }>;
 }
 
 interface PageViewState {
@@ -28,6 +34,33 @@ interface ToolbarState {
   x: number;
   y: number;
   annotationId: string;
+}
+
+interface FormulaState {
+  status: 'loading' | 'done' | 'error';
+  latex?: string;
+  message?: string;
+  copied?: boolean;
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch { /* fall through to the execCommand path */ }
+  try {
+    const helper = document.createElement('textarea');
+    helper.value = text;
+    helper.style.position = 'fixed';
+    helper.style.opacity = '0';
+    document.body.append(helper);
+    helper.select();
+    const ok = document.execCommand('copy');
+    helper.remove();
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 function newId(): string {
@@ -62,6 +95,8 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
   const [flashId, setFlashId] = useState<string | null>(null);
   const [toolbar, setToolbar] = useState<ToolbarState | null>(null);
   const [areaMode, setAreaMode] = useState(false);
+  const [formulaMode, setFormulaMode] = useState(false);
+  const [formula, setFormula] = useState<FormulaState | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const loadingTaskRef = useRef<{ destroy: () => Promise<void> } | null>(null);
   const pageViewports = useRef(new Map<number, ViewportLike>());
@@ -144,6 +179,34 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
     [props.onCreate],
   );
 
+  const handleFormulaCrop = useCallback(
+    async (dataUrl: string | null) => {
+      setFormulaMode(false);
+      if (!dataUrl) {
+        setFormula({ status: 'error', message: 'Could not crop the selected region.' });
+        return;
+      }
+      if (!props.onFormulaOcr) {
+        setFormula({ status: 'error', message: 'Formula OCR is not configured on this page.' });
+        return;
+      }
+      setFormula({ status: 'loading' });
+      try {
+        const result = await props.onFormulaOcr(dataUrl);
+        setFormula({ status: 'done', latex: result.latex, copied: false });
+        // "One-click" flow: recognition auto-copies; the panel's Copy button
+        // is the fallback when the clipboard write needs a user gesture.
+        void copyText(result.latex).then(ok => {
+          setFormula(current => (current?.status === 'done' ? { ...current, copied: ok } : current));
+        });
+      } catch (error) {
+        setFormula({ status: 'error', message: error instanceof Error ? error.message : String(error) });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.onFormulaOcr],
+  );
+
   const locateAnnotation = useCallback((annotation: PdfAnnotation) => {
     setSelectedId(annotation.id);
     setFlashId(annotation.id);
@@ -220,9 +283,24 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
           className={`wz-area-toggle${areaMode ? ' wz-area-active' : ''}`}
           aria-pressed={areaMode}
           title="Draw a rectangular area annotation (drag on the page)"
-          onClick={() => setAreaMode(mode => !mode)}
+          onClick={() => {
+            setAreaMode(mode => !mode);
+            setFormulaMode(false);
+          }}
         >
           ▦ Area
+        </button>
+        <button
+          type="button"
+          className={`wz-area-toggle wz-formula-toggle${formulaMode ? ' wz-area-active' : ''}`}
+          aria-pressed={formulaMode}
+          title="Drag a box around a formula to recognize it as LaTeX and copy"
+          onClick={() => {
+            setFormulaMode(mode => !mode);
+            setAreaMode(false);
+          }}
+        >
+          ∑ LaTeX
         </button>
       </header>
       <div className="wz-body">
@@ -239,10 +317,12 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
               annotations={annotations.filter(annotation => annotation.pageIndex === index)}
               selectedId={selectedId}
               flashId={flashId}
-              onSelect={setSelectedId}
-              areaMode={areaMode}
-              onAreaSelect={(rect, at) => void handleAreaSelect(index, rect, at)}
-            />
+                  onSelect={setSelectedId}
+                  areaMode={areaMode}
+                  formulaMode={formulaMode}
+                  onAreaSelect={(rect, at) => void handleAreaSelect(index, rect, at)}
+                  onFormulaCrop={dataUrl => void handleFormulaCrop(dataUrl)}
+                />
           ))}
           {pdfDoc && pdfDoc.numPages > pageLimit && (
             <button type="button" className="wz-load-more" onClick={() => setPageLimit(limit => limit + 20)}>
@@ -281,6 +361,17 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
           onClose={() => setToolbar(null)}
         />
       )}
+      {formula && (
+        <FormulaPanel
+          state={formula}
+          onChange={latex => setFormula(current => (current ? { ...current, latex } : current))}
+          onCopy={async () => {
+            const ok = await copyText(formula.latex || '');
+            setFormula(current => (current ? { ...current, copied: ok } : current));
+          }}
+          onClose={() => setFormula(null)}
+        />
+      )}
     </div>
   );
 }
@@ -296,10 +387,12 @@ interface PdfPageViewProps {
   flashId: string | null;
   onSelect: (id: string) => void;
   areaMode: boolean;
+  formulaMode: boolean;
   onAreaSelect: (cssRect: Rect, at: { x: number; y: number }) => void;
+  onFormulaCrop: (dataUrl: string | null) => void;
 }
 
-function PdfPageView({ pdf, pageIndex, scale, rotation, viewportSink, annotations, selectedId, flashId, onSelect, areaMode, onAreaSelect }: PdfPageViewProps) {
+function PdfPageView({ pdf, pageIndex, scale, rotation, viewportSink, annotations, selectedId, flashId, onSelect, areaMode, formulaMode, onAreaSelect, onFormulaCrop }: PdfPageViewProps) {
   const [view, setView] = useState<PageViewState | null>(null);
   const [draft, setDraft] = useState<{ origin: { x: number; y: number }; current: { x: number; y: number } } | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -318,6 +411,32 @@ function PdfPageView({ pdf, pageIndex, scale, rotation, viewportSink, annotation
     width: Math.abs(state.current.x - state.origin.x),
     height: Math.abs(state.current.y - state.origin.y),
   });
+
+  /**
+   * Crops a CSS-pixel rect out of this page's canvas. The backing store is
+   * DPR-scaled relative to the CSS size, so map through the actual pixel
+   * ratio; a white underlay keeps transparent PDF regions OCR-friendly.
+   */
+  const cropToDataUrl = (cssRect: Rect): string | null => {
+    const canvas = canvasRef.current;
+    if (!canvas || canvas.width === 0 || canvas.height === 0) return null;
+    const scaleX = canvas.width / canvas.clientWidth;
+    const scaleY = canvas.height / canvas.clientHeight;
+    const sx = Math.max(0, Math.floor(cssRect.x * scaleX));
+    const sy = Math.max(0, Math.floor(cssRect.y * scaleY));
+    const sw = Math.min(canvas.width - sx, Math.max(1, Math.floor(cssRect.width * scaleX)));
+    const sh = Math.min(canvas.height - sy, Math.max(1, Math.floor(cssRect.height * scaleY)));
+    if (sw < 8 || sh < 8) return null;
+    const out = document.createElement('canvas');
+    out.width = sw;
+    out.height = sh;
+    const context = out.getContext('2d');
+    if (!context) return null;
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, sw, sh);
+    context.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+    return out.toDataURL('image/png');
+  };
 
   useEffect(() => {
     if (!pdf) return;
@@ -392,7 +511,7 @@ function PdfPageView({ pdf, pageIndex, scale, rotation, viewportSink, annotation
     >
       <canvas ref={canvasRef} />
       <div ref={textLayerRef} className="wz-text-layer" />
-      {areaMode && (
+      {(areaMode || formulaMode) && (
         <div
           className="wz-area-capture"
           data-testid="area-capture"
@@ -409,7 +528,8 @@ function PdfPageView({ pdf, pageIndex, scale, rotation, viewportSink, annotation
             const rect = draftRect(draft);
             setDraft(null);
             if (rect.width >= 8 && rect.height >= 8) {
-              onAreaSelect(rect, { x: event.clientX, y: event.clientY });
+              if (formulaMode) onFormulaCrop(cropToDataUrl(rect));
+              else onAreaSelect(rect, { x: event.clientX, y: event.clientY });
             }
           }}
         >
@@ -486,6 +606,45 @@ function FloatingToolbar({ x, y, annotation, onColor, onComment, onDelete, onClo
       )}
       <button type="button" onClick={onDelete} aria-label="Delete annotation">🗑</button>
       <button type="button" onClick={onClose} aria-label="Close toolbar">✕</button>
+    </div>
+  );
+}
+
+interface FormulaPanelProps {
+  state: FormulaState;
+  onChange: (latex: string) => void;
+  onCopy: () => void | Promise<void>;
+  onClose: () => void;
+}
+
+/** Result panel for the ∑ LaTeX mode: recognized LaTeX + one-click copy. */
+function FormulaPanel({ state, onChange, onCopy, onClose }: FormulaPanelProps) {
+  return (
+    <div className="wz-formula-panel" role="dialog" aria-label="Recognized LaTeX" data-testid="formula-panel">
+      <header>
+        <span>∑ LaTeX</span>
+        <button type="button" onClick={onClose} aria-label="Close formula panel">✕</button>
+      </header>
+      {state.status === 'loading' && <p className="wz-formula-status">Recognizing formula…</p>}
+      {state.status === 'error' && <p className="wz-formula-status wz-formula-error" role="alert">{state.message}</p>}
+      {state.status === 'done' && (
+        <>
+          <textarea
+            className="wz-formula-latex"
+            value={state.latex}
+            onChange={event => onChange(event.target.value)}
+            rows={4}
+            spellCheck={false}
+            aria-label="Recognized LaTeX"
+          />
+          <div className="wz-formula-actions">
+            <button type="button" className="wz-formula-copy" onClick={() => void onCopy()}>Copy LaTeX</button>
+            <span className="wz-formula-copied" data-testid="formula-copied">
+              {state.copied ? '✓ copied' : ''}
+            </span>
+          </div>
+        </>
+      )}
     </div>
   );
 }

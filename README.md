@@ -49,6 +49,17 @@ DATA_DIR=./data
 
 `WEB_PASSWORD` protects all API and file endpoints in single-password mode. If omitted, the service is open to anyone who can reach the configured network interface; always set it before remote exposure. Login attempts are rate-limited (10 failures per IP per 5 minutes); use `POST /api/auth/logout` to revoke a session token.
 
+## Formula OCR (one-click LaTeX from PDFs)
+
+The PDF annotator has a `∑ LaTeX` toolbar mode: drag a box around any formula and the recognized LaTeX is copied to your clipboard automatically (with an editable result panel as fallback). Recognition runs through [Pix2Text](https://github.com/breezedeus/Pix2Text), an open-source Mathpix alternative that runs as a separate local service:
+
+```powershell
+pip install pix2text
+p2t serve -l en,ch_sim -H 127.0.0.1 -p 8503
+```
+
+Optional `.env` settings: `FORMULA_OCR_URL` (default `http://127.0.0.1:8503/pix2text`) points the proxy at your instance — the Node server stays dependency-free and only forwards cropped PNGs via `POST /api/formula-ocr`.
+
 ## Multi-user mode
 
 Create the first account to switch the server from open/single-password mode to per-user accounts (the first account always becomes the workspace owner):

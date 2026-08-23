@@ -242,3 +242,51 @@ body {
 }
 .wz-annotation-rect.rect { opacity: 0.25; border: 2px solid; border-radius: 4px; }
 .wz-annotation-rect.rect.wz-selected { opacity: 0.4; }
+
+/* Formula OCR (∑ LaTeX) mode + result panel */
+.wz-formula-toggle.wz-area-active { border-color: #2f9e6e; color: #2f9e6e; }
+.wz-formula-panel {
+  position: fixed;
+  right: 18px;
+  bottom: 64px;
+  z-index: 120;
+  width: min(420px, calc(100vw - 24px));
+  background: var(--wz-panel);
+  border: 1px solid var(--wz-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  padding: 12px 14px;
+}
+.wz-formula-panel header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.wz-formula-panel header button { background: none; border: none; color: inherit; cursor: pointer; font-size: 14px; }
+.wz-formula-status { color: #9aa4b5; margin: 4px 0; }
+.wz-formula-error { color: #ff8d7a; white-space: pre-wrap; }
+.wz-formula-latex {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  background: #10131a;
+  color: #e6e9f0;
+  border: 1px solid var(--wz-border);
+  border-radius: 8px;
+  padding: 8px;
+  resize: vertical;
+}
+.wz-formula-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.wz-formula-copy {
+  background: #2f9e6e;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.wz-formula-copied { color: #2f9e6e; font-weight: 600; }
