@@ -340,9 +340,24 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
                 className={annotation.id === selectedId ? 'wz-selected-item' : ''}
                 onClick={() => locateAnnotation(annotation)}
               >
-                <span className="wz-chip" style={{ backgroundColor: annotation.color }}>
-                  p. {annotation.pageIndex + 1}
-                </span>
+                <div className="wz-sidebar-item-head">
+                  <span className="wz-chip" style={{ backgroundColor: annotation.color }}>
+                    p. {annotation.pageIndex + 1}
+                  </span>
+                  <button
+                    type="button"
+                    className="wz-sidebar-delete"
+                    title="Delete this annotation"
+                    aria-label={`Delete annotation on page ${annotation.pageIndex + 1}`}
+                    onClick={event => {
+                      event.stopPropagation();
+                      void props.onDelete(annotation.id);
+                      if (toolbar?.annotationId === annotation.id) setToolbar(null);
+                    }}
+                  >
+                    🗑
+                  </button>
+                </div>
                 {annotation.quoteText && <blockquote>{annotation.quoteText}</blockquote>}
                 {annotation.commentText && <p className="wz-comment">{annotation.commentText}</p>}
               </li>

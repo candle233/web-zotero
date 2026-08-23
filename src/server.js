@@ -405,6 +405,9 @@ async function handleApi(request, response, url) {
   if (/^\/api\/items\/[^/]+\/notes$/.test(pathname)) {
     const itemKey = decodeURIComponent(pathname.split('/')[3]);
     if (request.method === 'GET') return sendJson(response, 200, webStore.getNote(itemKey));
+    if (request.method === 'DELETE') {
+      return sendJson(response, 200, webStore.deleteNote(itemKey));
+    }
     const body = await readJson(request);
     if (typeof body.html === 'string') {
       const html = sanitizeNoteHtml(body.html.slice(0, 210000));

@@ -44,6 +44,12 @@ class WebStore {
     return { itemKey, content: String(content || ''), html, updatedAt };
   }
 
+  deleteNote(itemKey) {
+    const existed = Boolean(this.getNote(itemKey).updatedAt);
+    this.database.prepare('DELETE FROM web_notes WHERE item_key = ?').run(String(itemKey));
+    return { ok: true, deleted: existed };
+  }
+
   saveProgress(itemKey, percent) {
     const bounded = Math.min(100, Math.max(0, Number(percent) || 0));
     const updatedAt = new Date().toISOString();

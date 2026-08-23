@@ -304,6 +304,29 @@ function renderDetail(item) {
     } finally { saveNote.disabled = false; }
   });
   notePanel.append(noteView, noteArea, saveNote, noteStatus);
+  const deleteNote = document.createElement('button');
+  deleteNote.className = 'ghost';
+  deleteNote.textContent = '🗑 Delete note';
+  deleteNote.title = 'Remove the saved web note for this item';
+  deleteNote.hidden = true;
+  deleteNote.style.marginLeft = '7px';
+  deleteNote.addEventListener('click', async () => {
+    if (!window.confirm('Delete this web note?')) return;
+    try {
+      await request(`/api/items/${encodeURIComponent(item.key)}/notes`, { method: 'DELETE' });
+      noteView.hidden = true;
+      noteView.replaceChildren();
+      noteArea.hidden = false;
+      noteArea.value = '';
+      saveNote.hidden = false;
+      deleteNote.hidden = true;
+      noteStatus.textContent = '';
+      showToast('Note deleted');
+    } catch (error) {
+      setStatus(error.message, true);
+    }
+  });
+  notePanel.append(deleteNote);
   const richText = document.createElement('button');
   richText.className = 'ghost';
   richText.textContent = '✍️ Rich text editor';
@@ -315,7 +338,10 @@ function renderDetail(item) {
   });
   notePanel.append(richText);
   request(`/api/items/${item.key}/notes`).then(note => {
-    if (note.updatedAt) noteStatus.textContent = `Saved ${new Date(note.updatedAt).toLocaleString()}`;
+    if (note.updatedAt) {
+      noteStatus.textContent = `Saved ${new Date(note.updatedAt).toLocaleString()}`;
+      deleteNote.hidden = false;
+    }
     if (note.html) {
       noteView.hidden = false;
       noteArea.hidden = true;

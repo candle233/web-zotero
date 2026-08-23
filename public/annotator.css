@@ -290,3 +290,13 @@ body {
   cursor: pointer;
 }
 .wz-formula-copied { color: #2f9e6e; font-weight: 600; }
+.wz-sidebar-item-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.wz-sidebar-delete {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0.45;
+  padding: 2px 4px;
+}
+.wz-sidebar-delete:hover { opacity: 1; }
