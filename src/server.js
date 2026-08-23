@@ -2,6 +2,7 @@
 
 require('dotenv').config();
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const http = require('node:http');
@@ -28,7 +29,9 @@ const { ask } = require('./ask');
 const { EventBus } = require('./events');
 
 const PORT = Number(process.env.PORT || 8420);
-const HOST = process.env.HOST || '0.0.0.0';
+// Loopback by default: a library server with no configured auth would otherwise
+// hand the whole LAN owner access. Set HOST=0.0.0.0 to expose deliberately.
+const HOST = process.env.HOST || '127.0.0.1';
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 const ZOTERO_PROFILE_ROOT = process.env.ZOTERO_PROFILE_ROOT ||
@@ -127,6 +130,40 @@ function authMode() {
   return { mode: users > 0 ? 'users' : (WEB_PASSWORD ? 'legacy' : 'open'), users };
 }
 
+/** Constant-time comparison for secrets of unknown length (hash first). */
+function secretsMatch(a, b) {
+  const left = crypto.createHash('sha256').update(String(a)).digest();
+  const right = crypto.createHash('sha256').update(String(b)).digest();
+  return crypto.timingSafeEqual(left, right);
+}
+
+// Sliding-window login throttle: per-IP failed-attempt budget. Successful
+// logins reset the window so honest users are never locked out by typos.
+const loginAttempts = new Map();
+const LOGIN_WINDOW_MS = 5 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 10;
+
+function clientIp(request) {
+  return request.socket?.remoteAddress || 'unknown';
+}
+
+function loginThrottled(ip) {
+  const cutoff = Date.now() - LOGIN_WINDOW_MS;
+  const failures = (loginAttempts.get(ip) || []).filter(timestamp => timestamp > cutoff);
+  loginAttempts.set(ip, failures);
+  return failures.length >= LOGIN_MAX_FAILURES;
+}
+
+function recordLoginFailure(ip) {
+  const failures = loginAttempts.get(ip) || [];
+  failures.push(Date.now());
+  loginAttempts.set(ip, failures);
+}
+
+function clearLoginFailures(ip) {
+  loginAttempts.delete(ip);
+}
+
 /**
  * Resolves the request principal across the three auth modes:
  *   users  – per-user session tokens (UserStore), optional operator password;
@@ -140,7 +177,7 @@ function resolvePrincipal(request, url) {
   if (token) {
     const user = userStore.resolveToken(token);
     if (user) return { kind: 'user', user, role: user.role, token };
-    if (WEB_PASSWORD && token === WEB_PASSWORD) return { kind: 'legacy', user: null, role: 'owner', token };
+    if (WEB_PASSWORD && secretsMatch(token, WEB_PASSWORD)) return { kind: 'legacy', user: null, role: 'owner', token };
     if (mode.mode === 'open') return { kind: 'open', user: null, role: 'owner' };
     return null;
   }
@@ -166,15 +203,47 @@ async function readJson(request) {
     body += chunk;
     if (body.length > 1000000) throw Object.assign(new Error('Request too large.'), { statusCode: 413 });
   }
-  return body ? JSON.parse(body) : {};
+  if (!body) return {};
+  try {
+    return JSON.parse(body);
+  } catch (error) {
+    throw Object.assign(new Error(`Invalid JSON body: ${error.message}`), { statusCode: 400 });
+  }
 }
+
+// Baseline security headers for every static response. CSP allows the two
+// esbuild bundles plus inline styles (JS-driven styling); PDF.js runs its
+// worker as a same-origin module and may use blob: frames on some browsers.
+const SECURITY_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'x-frame-options': 'SAMEORIGIN',
+  'content-security-policy': [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "frame-src 'self' blob:",
+    "worker-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'"
+  ].join('; ')
+};
 
 async function serveFile(response, relativePath, contentType, maxAge = 3600) {
   const filePath = path.join(PUBLIC_DIR, relativePath);
   if (!filePath.startsWith(PUBLIC_DIR + path.sep)) return sendJson(response, 403, { error: 'Forbidden' });
   try {
     const data = await fsp.readFile(filePath);
-    response.writeHead(200, { 'content-type': contentType, 'content-length': data.length, 'cache-control': `public, max-age=${maxAge}` });
+    response.writeHead(200, {
+      'content-type': contentType,
+      'content-length': data.length,
+      'cache-control': `public, max-age=${maxAge}`,
+      ...SECURITY_HEADERS
+    });
     response.end(data);
   } catch {
     sendJson(response, 404, { error: 'Not found' });
@@ -184,7 +253,22 @@ async function serveFile(response, relativePath, contentType, maxAge = 3600) {
 async function servePdf(request, response, itemKey, attachmentKey) {
   const pdf = zoteroDatabase.resolvePdf(itemKey, attachmentKey);
   if (!pdf) return sendJson(response, 404, { error: 'PDF not found' });
-  const stat = await fsp.stat(pdf.filePath);
+  let stat;
+  try {
+    stat = await fsp.stat(pdf.filePath);
+  } catch {
+    return sendJson(response, 404, { error: 'The PDF file is no longer on disk. Refresh the library.' });
+  }
+  // The file can vanish or lock between stat and read; an unhandled stream
+  // error would crash the whole process, so route it to a clean 410.
+  const pipeStream = (stream, headers) => {
+    stream.on('error', () => {
+      if (!response.headersSent) sendJson(response, 410, { error: 'The PDF became unreadable while streaming.' });
+      response.destroy();
+    });
+    response.writeHead(headers.status, headers.head);
+    stream.pipe(response);
+  };
   const range = request.headers.range;
   if (range) {
     const match = /^bytes=(\d*)-(\d*)$/.exec(range);
@@ -197,25 +281,27 @@ async function servePdf(request, response, itemKey, attachmentKey) {
       response.writeHead(416, { 'content-range': `bytes */${stat.size}` });
       return response.end();
     }
-    const stream = fs.createReadStream(pdf.filePath, { start, end });
-    response.writeHead(206, {
-      'content-type': 'application/pdf',
-      'content-length': end - start + 1,
-      'accept-ranges': 'bytes',
-      'content-range': `bytes ${start}-${end}/${stat.size}`,
-      'x-content-type-options': 'nosniff'
+    return pipeStream(fs.createReadStream(pdf.filePath, { start, end }), {
+      status: 206,
+      head: {
+        'content-type': 'application/pdf',
+        'content-length': end - start + 1,
+        'accept-ranges': 'bytes',
+        'content-range': `bytes ${start}-${end}/${stat.size}`,
+        'x-content-type-options': 'nosniff'
+      }
     });
-    stream.pipe(response);
-    return;
   }
-  response.writeHead(200, {
-    'content-type': 'application/pdf',
-    'content-length': stat.size,
-    'accept-ranges': 'bytes',
-    'x-content-type-options': 'nosniff',
-    'cache-control': 'private, max-age=300'
+  return pipeStream(fs.createReadStream(pdf.filePath), {
+    status: 200,
+    head: {
+      'content-type': 'application/pdf',
+      'content-length': stat.size,
+      'accept-ranges': 'bytes',
+      'x-content-type-options': 'nosniff',
+      'cache-control': 'private, max-age=300'
+    }
   });
-  fs.createReadStream(pdf.filePath).pipe(response);
 }
 
 async function serveText(request, response, itemKey, attachmentKey) {
@@ -257,14 +343,24 @@ async function handleApi(request, response, url) {
     const items = await zoteroDatabase.refreshItems();
     const query = (url.searchParams.get('q') || '').toLowerCase().trim();
     const collectionId = Number(url.searchParams.get('collection'));
+    const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
+    const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 200));
     const filtered = query ? items.filter(item => itemMatchesQuery(item, query)) : items;
-    const result = Number.isFinite(collectionId) && collectionId > 0
-      ? filtered.filter(item => {
-          const detail = zoteroDatabase.itemDetail(item.key);
-          return detail.collections.some(collection => collection.id === collectionId);
-        })
+    const collectionIds = Number.isFinite(collectionId) && collectionId > 0
+      ? zoteroDatabase.collectionItemIds(collectionId)
+      : null;
+    const result = collectionIds
+      ? filtered.filter(item => collectionIds.has(item.id))
       : filtered;
-    return sendJson(response, 200, { count: result.length, items: result.slice(0, 500) });
+    const page = result.slice(offset, offset + limit);
+    return sendJson(response, 200, {
+      count: result.length,
+      total: result.length,
+      offset,
+      limit,
+      hasMore: offset + page.length < result.length,
+      items: page
+    });
   }
 
   if (pathname.startsWith('/api/items/') && pathname.endsWith('/detail') && request.method === 'GET') {
@@ -390,7 +486,7 @@ async function handleApi(request, response, url) {
     return sendJson(response, 200, await offlineLibrary.save(pdf.itemKey || decodeURIComponent(itemKey), pdf.key, pdf.filePath));
   }
 
-  if (pathname === '/api/offline') {
+  if (pathname === '/api/offline' && request.method === 'GET') {
     return sendJson(response, 200, { offline: await offlineLibrary.listDetailed() });
   }
 
@@ -401,7 +497,7 @@ async function handleApi(request, response, url) {
     return sendJson(response, 200, webStore.saveProgress(itemKey, body.percent));
   }
 
-  if (pathname === '/api/collections') {
+  if (pathname === '/api/collections' && request.method === 'GET') {
     const rows = zoteroDatabase.database.prepare(`
       SELECT c.collectionID AS id, c.collectionName AS name, c.parentCollectionID AS parentId,
              (SELECT COUNT(*) FROM collectionItems ci JOIN items i ON i.itemID=ci.itemID
@@ -528,7 +624,7 @@ async function handleApi(request, response, url) {
     }
   }
 
-  if (pathname === '/api/plugins') {
+  if (pathname === '/api/plugins' && request.method === 'GET') {
     const plugins = await installedDesktopPlugins(ZOTERO_PROFILE_ROOT);
     return sendJson(response, 200, {
       note: 'Desktop XPI plug-ins cannot execute directly in a browser sandbox. These are compatibility and library endpoints for web clients.',
@@ -538,19 +634,37 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/auth' && request.method === 'POST') {
+    const ip = clientIp(request);
+    if (loginThrottled(ip)) {
+      return sendJson(response, 429, { error: 'Too many failed login attempts. Try again in a few minutes.', auth: true });
+    }
     const body = await readJson(request);
     const mode = authMode();
     if (typeof body.email === 'string' && body.email.trim()) {
-      const user = userStore.authenticate(body.email, body.password);
-      return sendJson(response, 200, { token: userStore.issueToken(user), user });
+      try {
+        const user = userStore.authenticate(body.email, body.password);
+        clearLoginFailures(ip);
+        return sendJson(response, 200, { token: userStore.issueToken(user), user });
+      } catch (error) {
+        recordLoginFailure(ip);
+        return sendJson(response, error.statusCode || 401, { error: error.message, auth: true });
+      }
     }
     if (mode.mode === 'users') {
       return sendJson(response, 401, { error: 'Email and password are required.', auth: true, mode: mode.mode });
     }
-    if (!WEB_PASSWORD || body.password !== WEB_PASSWORD) {
+    if (!WEB_PASSWORD || !secretsMatch(body.password, WEB_PASSWORD)) {
+      recordLoginFailure(ip);
       return sendJson(response, 401, { error: 'Invalid password', auth: true, mode: mode.mode });
     }
+    clearLoginFailures(ip);
     return sendJson(response, 200, { ok: true, token: WEB_PASSWORD, user: { role: 'owner' } });
+  }
+
+  // Revokes the caller's session token (user mode); no-op for legacy/open.
+  if (pathname === '/api/auth/logout' && request.method === 'POST') {
+    if (principal?.kind === 'user' && principal.token) userStore.revokeToken(principal.token);
+    return sendJson(response, 200, { ok: true });
   }
 
   if (pathname === '/api/me' && request.method === 'GET') {
@@ -704,14 +818,24 @@ async function handle(request, response) {
 async function main() {
   await zoteroDatabase.refreshItems();
   const server = http.createServer(handle);
+  // Keep serving after stray stream/promise errors: log loudly instead of dying.
+  process.on('uncaughtException', error => console.error(`uncaughtException: ${error.stack || error}`));
+  process.on('unhandledRejection', reason => console.error(`unhandledRejection: ${reason?.stack || reason}`));
   server.listen(PORT, HOST, async () => {
-    const addresses = [`${os.hostname()}:${PORT}`, ...Object.values(os.networkInterfaces()).flat()
-      .filter(network => network?.family === 'IPv4' && !network.internal)
-      .map(network => `${network.address}:${PORT}`)];
-    console.log(`Web Zotero ready on ${PORT}`);
-    for (const address of addresses) console.log(`  http://${address}`);
-    console.log(`Library items: ${zoteroDatabase.items.length}; indexed documents: ${searchIndex.status().indexed}`);
     const mode = authMode();
+    const loopback = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
+    console.log(`Web Zotero ready on ${PORT} (bound to ${HOST})`);
+    if (loopback) {
+      console.log('  Remote access: set HOST=0.0.0.0 (plus WEB_PASSWORD or user accounts) to expose to your LAN.');
+    } else {
+      for (const network of Object.values(os.networkInterfaces()).flat()) {
+        if (network?.family === 'IPv4' && !network.internal) console.log(`  http://${network.address}:${PORT}`);
+      }
+      if (mode.mode === 'open') {
+        console.warn('  WARNING: reachable from the network with NO authentication. Set WEB_PASSWORD or create a user account.');
+      }
+    }
+    console.log(`Library items: ${zoteroDatabase.items.length}; indexed documents: ${searchIndex.status().indexed}`);
     console.log(`Auth mode: ${mode.mode}${mode.mode === 'users' ? ` (${mode.users} users)` : ''}`);
   });
   setImmediate(() => searchIndex.reindex({ limit: 100000 }).then(result => {
@@ -729,6 +853,11 @@ async function main() {
   }).catch(error => console.error(error.message)));
   const shutdown = () => {
     eventBus.closeAll();
+    // Force-exit after 5s: lingering keep-alive connections would otherwise
+    // keep server.close()'s callback (and the process) alive indefinitely.
+    const forceExit = setTimeout(() => process.exit(0), 5000);
+    forceExit.unref();
+    server.closeAllConnections?.();
     server.close(() => {
       searchIndex.database.close();
       webStore.database.close();

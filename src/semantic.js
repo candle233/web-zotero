@@ -14,6 +14,12 @@
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, character => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]
+  ));
+}
+
 const LATIN_STOP_WORDS = new Set(`a about above after again against all also am an and any are as at be because been before being between both but by can could did do does doing down during each few for from further had has have having he her here hers herself him himself his how i if in into is it its itself just more most my no nor not now of on only or other our ours out over own same she should so some such than that the their theirs them themselves then there these they this those through to too under until up very was we were what when where which while who whom why will with would you your`.split(/\s+/));
 
 const CJK_RUN = /[\u3400-\u4dbf\u4e00-\u9fff]+/g;
@@ -115,6 +121,7 @@ class SemanticIndex {
     this.database = new DatabaseSync(path.join(dataDir, 'semantic-index.sqlite'));
     this.database.exec(`
       PRAGMA journal_mode = WAL;
+      PRAGMA busy_timeout = 5000;
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB);
       CREATE TABLE IF NOT EXISTS terms (term TEXT PRIMARY KEY, idx INTEGER NOT NULL, df INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS chunks (
@@ -408,7 +415,8 @@ class SemanticIndex {
           attachmentKey: chunk.attachmentKey,
           title: chunk.title,
           score,
-          snippet: chunk.text.length > 280 ? `${chunk.text.slice(0, 280)}…` : chunk.text
+          // Escaped because the UI renders snippets as HTML (lexical snippets carry <mark>).
+          snippet: escapeHtml(chunk.text.length > 280 ? `${chunk.text.slice(0, 280)}…` : chunk.text)
         });
       }
     }

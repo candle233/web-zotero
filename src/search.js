@@ -5,12 +5,31 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, character => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]
+  ));
+}
+
+// Snippet markers that cannot appear in PDF text; they survive FTS5 and get
+// converted to <mark> only after the surrounding text is HTML-escaped, so a
+// hostile text layer can never inject markup through snippet HTML.
+const MARK_START = '\u0001';
+const MARK_END = '\u0002';
+
+function safeSnippet(rawSnippet) {
+  return escapeHtml(rawSnippet)
+    .replaceAll(MARK_START, '<mark>')
+    .replaceAll(MARK_END, '</mark>');
+}
+
 class SearchIndex {
   constructor(dataDir, zoteroDatabase) {
     this.zoteroDatabase = zoteroDatabase;
     this.database = new DatabaseSync(path.join(dataDir, 'search-index.sqlite'));
     this.database.exec(`
       PRAGMA journal_mode = WAL;
+      PRAGMA busy_timeout = 5000;
       CREATE VIRTUAL TABLE IF NOT EXISTS documents USING fts5(
         item_key UNINDEXED, attachment_key UNINDEXED, title, authors, text,
         tokenize = 'unicode61 remove_diacritics 2'
@@ -78,13 +97,14 @@ class SearchIndex {
     try {
       return this.database.prepare(`
         SELECT item_key AS itemKey, attachment_key AS attachmentKey, title, authors,
-               snippet(documents, 4, '<mark>', '</mark>', '…', 18) AS snippet,
+               snippet(documents, 4, '${MARK_START}', '${MARK_END}', '…', 18) AS snippet,
                bm25(documents, 0, 0, 3, 1, 1) AS score
         FROM documents
         WHERE documents MATCH ?
         ORDER BY score
         LIMIT ?
-      `).all(matchQuery, Math.min(100, Math.max(1, limit)));
+      `).all(matchQuery, Math.min(100, Math.max(1, limit)))
+        .map(row => ({ ...row, snippet: safeSnippet(row.snippet) }));
     } catch {
       return [];
     }

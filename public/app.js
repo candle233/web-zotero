@@ -7,26 +7,31 @@ const state = {
   activeKey: null,
   activeAttachment: '',
   view: 'detail',
-  searchMode: false
+  searchMode: false,
+  total: 0,
+  hasMore: false,
+  loadingMore: false
 };
 
 const elements = {};
-['searchInput','semanticToggle','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','pdfFallback','fallbackAnnotatorButton','fallbackNewTabButton','openAnnotatorButton','newTabButton','aiResult','askInput','askButton','summarizeButton','extractTextButton','searchResults','resultCount','resultList','toast','backButton','closeSearch','lookupInput','lookupButton','lookupBody','closeLookup']
+['searchInput','semanticToggle','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','pdfFallback','fallbackAnnotatorButton','fallbackNewTabButton','openAnnotatorButton','newTabButton','aiResult','askInput','askButton','summarizeButton','extractTextButton','searchResults','resultCount','resultList','toast','backButton','closeSearch','lookupInput','lookupButton','lookupBody','closeLookup','logoutButton']
   .forEach(id => { elements[id] = document.getElementById(id); });
 
 function authHeaders(extra = {}) {
   return state.token ? { authorization: `Bearer ${state.token}`, ...extra } : extra;
 }
 
-async function request(path, options = {}) {
+async function request(path, options = {}, { retried = false } = {}) {
   const response = await fetch(path, {
     ...options,
     headers: { 'content-type': 'application/json', ...authHeaders(), ...(options.headers || {}) }
   });
   const payload = await response.json().catch(() => ({}));
   if (response.status === 401 && payload.auth) {
+    // One retry only: a stale token prompts once, a rejected login surfaces as an error.
+    if (retried) throw new Error(payload.error || 'Login failed');
     await login(payload.mode || 'legacy');
-    return request(path, options);
+    return request(path, options, { retried: true });
   }
   if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
   return payload;
@@ -45,6 +50,7 @@ async function login(mode) {
     return;
   }
   const password = prompt('Enter the remote access password:') || '';
+  if (!password) throw new Error('Login cancelled');
   await fetch('/api/auth', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({password}) }).then(async result => {
     if (!result.ok) throw new Error('Invalid password');
     state.token = password;
@@ -77,14 +83,27 @@ async function loadCollections() {
   state.collections = (await request('/api/collections')).collections;
 }
 
-async function loadItems() {
+const PAGE_SIZE = 200;
+
+async function logout() {
+  try { await request('/api/auth/logout', { method: 'POST' }); } catch {}
+  state.token = '';
+  localStorage.removeItem('web-zotero-token');
+  window.location.reload();
+}
+
+async function loadItems({ append = false } = {}) {
   const query = encodeURIComponent(elements.searchInput.value.trim());
   const collection = document.getElementById('collectionSelect').value;
   const params = new URLSearchParams();
   if (query) params.set('q', query);
   if (collection) params.set('collection', collection);
+  if (append) params.set('offset', String(state.items.length));
+  params.set('limit', String(PAGE_SIZE));
   const data = await request(`/api/items?${params}`);
-  state.items = data.items;
+  state.items = append ? state.items.concat(data.items) : data.items;
+  state.total = data.total ?? data.count;
+  state.hasMore = data.hasMore;
   renderLibrary();
   setStatus(`${data.count} items`);
 }
@@ -115,6 +134,19 @@ function renderLibrary() {
     button.append(top, meta);
     button.addEventListener('click', () => openItem(item.key));
     fragment.append(button);
+  }
+  if (state.hasMore !== false && state.items.length < state.total) {
+    const more = document.createElement('button');
+    more.className = 'ghost load-more';
+    more.textContent = `Load more (${state.total - state.items.length} remaining)`;
+    more.disabled = state.loadingMore;
+    more.addEventListener('click', async () => {
+      state.loadingMore = true;
+      more.disabled = true;
+      try { await loadItems({ append: true }); } catch (error) { setStatus(error.message, true); }
+      finally { state.loadingMore = false; }
+    });
+    fragment.append(more);
   }
   elements.library.append(fragment);
 }
@@ -538,6 +570,29 @@ function sanitizeZoteroNoteHtml(html) {
   return template.content;
 }
 
+// Defense in depth for citation preview HTML (citeproc escapes its input, but
+// the lookup flow feeds third-party metadata through it): parse, drop
+// disallowed tags/attributes, then re-serialize.
+function sanitizeCslHtml(html) {
+  const template = document.createElement('template');
+  template.innerHTML = String(html || '');
+  const allowedTags = new Set(['DIV','SPAN','P','I','EM','B','STRONG','SUP','SUB','A','UL','OL','LI','BR','SMALL','CODE']);
+  for (const element of [...template.content.querySelectorAll('*')]) {
+    if (!allowedTags.has(element.tagName)) {
+      element.replaceWith(...element.childNodes);
+      continue;
+    }
+    for (const attribute of [...element.attributes]) {
+      const name = attribute.name.toLowerCase();
+      const safeHref = name === 'href' && /^(https?:|mailto:)/i.test(attribute.value.trim());
+      if (name.startsWith('on') || name === 'style' || name === 'class' || (name === 'href' && !safeHref)) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  }
+  return template.innerHTML;
+}
+
 function markdownToHtml(markdown) {
   return String(markdown)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -624,8 +679,10 @@ function renderSearch(data) {
   if (!data.results.length) elements.resultList.innerHTML = '<div class="empty">No indexed PDF matches this phrase.</div>';
 }
 
+let searchRequestId = 0;
 elements.searchInput.addEventListener('input', debounce(async () => {
   const value = elements.searchInput.value.trim();
+  const currentRequestId = ++searchRequestId;
   if (!value) {
     state.searchMode = false;
     elements.searchResults.classList.remove('active');
@@ -633,8 +690,11 @@ elements.searchInput.addEventListener('input', debounce(async () => {
     return;
   }
   const mode = elements.semanticToggle.checked ? 'hybrid' : 'lexical';
-  try { renderSearch(await request(`/api/search?q=${encodeURIComponent(value)}&mode=${mode}`)); }
-  catch (error) { setStatus(error.message, true); }
+  try {
+    const data = await request(`/api/search?q=${encodeURIComponent(value)}&mode=${mode}`);
+    if (currentRequestId === searchRequestId) renderSearch(data); // drop stale responses
+  }
+  catch (error) { if (currentRequestId === searchRequestId) setStatus(error.message, true); }
 }, 280));
 
 document.getElementById('collectionSelect').addEventListener('change', loadItems);
@@ -676,6 +736,10 @@ elements.openAnnotatorButton.addEventListener('click', openAnnotatorForCurrent);
 elements.newTabButton.addEventListener('click', openPdfInNewTab);
 elements.fallbackAnnotatorButton.addEventListener('click', openAnnotatorForCurrent);
 elements.fallbackNewTabButton.addEventListener('click', openPdfInNewTab);
+if (elements.logoutButton) {
+  elements.logoutButton.hidden = !state.token;
+  elements.logoutButton.addEventListener('click', logout);
+}
 
 // ---------------------------------------------------------------------------
 // Metadata lookup by identifier (DOI / arXiv / ISBN / BibTeX)
@@ -806,7 +870,7 @@ function buildCitationPanel({ itemKey = null, cslItems = null }) {
     try {
       const result = await request('/api/citations/format', { method: 'POST', body: JSON.stringify(payload) });
       if (currentRequestId !== requestId) return; // a newer request superseded this one
-      preview.innerHTML = result.entries.map(entry => entry.html).join('');
+      preview.innerHTML = sanitizeCslHtml(result.entries.map(entry => entry.html).join(''));
       lastPlain = result.entries.map(entry => entry.html.replace(/<[^>]+>/g, '')).join('\n\n');
       warning.textContent = result.warning || (result.engine === 'fallback' ? 'Using the simplified fallback formatter.' : '');
       warning.hidden = !warning.textContent;
@@ -856,9 +920,8 @@ function buildCitationPanel({ itemKey = null, cslItems = null }) {
   try {
     await Promise.all([loadCollections(), loadItems()]);
     renderCollections();
-    await loadItems();
     const index = await request('/api/search?q=');
-    setStatus(`Ready · ${zoteroCount()} library items · index ${index.index.indexed}`);
+    setStatus(`Ready · ${state.total} library items · index ${index.index.indexed}`);
   } catch (error) {
     setStatus(error.message, true);
   }

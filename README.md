@@ -35,7 +35,9 @@ Create `.env` in this folder:
 
 ```dotenv
 PORT=8420
-HOST=0.0.0.0
+# Loopback by default. Set HOST=0.0.0.0 to reach the server from other
+# devices — and always configure WEB_PASSWORD or user accounts first.
+HOST=127.0.0.1
 ZOTERO_DATABASE=C:\Users\example\Zotero\zotero.sqlite
 ZOTERO_STORAGE=C:\Users\example\Zotero\storage
 ZOTERO_PROFILE_ROOT=C:\Users\example\AppData\Roaming\Zotero\Zotero\Profiles\example.default
@@ -45,7 +47,7 @@ OPENAI_MODEL=gpt-4o-mini
 DATA_DIR=./data
 ```
 
-`WEB_PASSWORD` protects all API and file endpoints in single-password mode. If omitted, the service is open to anyone who can reach the configured network interface; always set it before remote exposure.
+`WEB_PASSWORD` protects all API and file endpoints in single-password mode. If omitted, the service is open to anyone who can reach the configured network interface; always set it before remote exposure. Login attempts are rate-limited (10 failures per IP per 5 minutes); use `POST /api/auth/logout` to revoke a session token.
 
 ## Multi-user mode
 

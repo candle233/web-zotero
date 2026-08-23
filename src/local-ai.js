@@ -66,6 +66,7 @@ async function openAiSummary({ apiKey, baseUrl = 'https://api.openai.com/v1', mo
   if (!excerpt) throw new Error('No extracted text is available for this PDF.');
   const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
     method: 'POST',
+    signal: AbortSignal.timeout(45000),
     headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
     body: JSON.stringify({
       model,

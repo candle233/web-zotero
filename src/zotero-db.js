@@ -12,7 +12,16 @@ class ZoteroDatabase {
   } = {}) {
     this.databasePath = databasePath;
     this.storagePath = storagePath;
+    if (!fs.existsSync(databasePath)) {
+      throw new Error(
+        `Zotero database not found at ${databasePath}.\n` +
+        'Set ZOTERO_DATABASE to the path of zotero.sqlite and ZOTERO_STORAGE to its storage folder.\n' +
+        'Close desktop Zotero first if the file is locked.'
+      );
+    }
     this.database = new DatabaseSync(databasePath, { readOnly: true });
+    // Desktop Zotero holds write locks during sync; wait instead of failing with SQLITE_BUSY.
+    this.database.exec('PRAGMA busy_timeout = 5000');
     this.itemCache = [];
   }
 
@@ -82,6 +91,18 @@ class ZoteroDatabase {
 
   getItemByKey(key) {
     return this.items.find(item => item.key === key);
+  }
+
+  /** One query for all item ids in a collection — avoids per-item lookups when filtering lists. */
+  collectionItemIds(collectionId) {
+    const rows = this.database.prepare(`
+      SELECT ci.itemID
+      FROM collectionItems ci
+      JOIN items i ON i.itemID = ci.itemID
+      LEFT JOIN deletedItems d ON d.itemID = i.itemID
+      WHERE ci.collectionID = ? AND d.itemID IS NULL
+    `).all(Number(collectionId));
+    return new Set(rows.map(row => row.itemID));
   }
 
   itemDetail(key) {

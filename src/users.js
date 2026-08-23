@@ -53,6 +53,7 @@ class UserStore {
     this.database = new DatabaseSync(path.join(dataDir, 'web-data.sqlite'));
     this.database.exec(`
       PRAGMA journal_mode = WAL;
+      PRAGMA busy_timeout = 5000;
       CREATE TABLE IF NOT EXISTS users (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
         email         TEXT NOT NULL,
