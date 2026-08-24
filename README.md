@@ -44,6 +44,7 @@ ZOTERO_PROFILE_ROOT=C:\Users\example\AppData\Roaming\Zotero\Zotero\Profiles\exam
 WEB_PASSWORD=change-this-strong-password
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
+AI_BASE_URL=https://api.openai.com/v1
 DATA_DIR=./data
 ```
 
@@ -78,6 +79,25 @@ Signed-in users manage their own account without owner help:
 - `POST /api/me/password` `{currentPassword, newPassword}` — rotates the password and returns a fresh token (previous sessions are revoked)
 - `GET /api/me/sessions` — lists active sessions with a `current` flag
 - `DELETE /api/me/sessions/:ref` — revokes one session by its `ref`
+
+## Library management
+
+- **批量导入 / Batch import** — paste BibTeX/RIS or a DOI/arXiv/ISBN identifier into the lookup box, then "加入文献库" stores every parsed record in the web layer (`web_items`); imported entries join the library list with full detail/export support and can be deleted. The read-only Zotero database is never written.
+- **标签与排序** — `GET /api/tags` powers the tag filter; `/api/items` accepts `sort=dateModified|dateAdded|title|author` and `tag=`.
+- **搜索直达页码** — full-text results carry a detected page number (form-feed markers in Zotero's text cache) and jump straight to that page in the annotator.
+- **阅读统计** — `GET /api/stats/reading` aggregates reading progress; shown in the sidebar panel.
+- **摘要缓存** — AI summaries are cached per item (`refresh=1` bypasses).
+- **界面语言 / 主题** — 中/EN switch and 🌓 light-dark toggle in the sidebar.
+
+### Local AI via Ollama
+
+Any OpenAI-compatible endpoint works. For fully offline Q&A/summaries:
+
+```dotenv
+AI_BASE_URL=http://127.0.0.1:11434/v1
+OPENAI_API_KEY=ollama
+OPENAI_MODEL=qwen2.5:7b
+```
 
 ## Live sync & offline
 

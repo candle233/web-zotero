@@ -19,6 +19,12 @@ class WebStore {
         scroll_percent REAL NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS ai_summaries (
+        item_key     TEXT PRIMARY KEY,
+        provider     TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at   TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS formula_history (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         latex       TEXT NOT NULL,
@@ -124,6 +130,45 @@ class WebStore {
       creators: JSON.parse(row.creators_json),
       fields: JSON.parse(row.fields_json)
     };
+  }
+
+  getCachedSummary(itemKey) {
+    const row = this.database.prepare(
+      'SELECT provider, payload_json AS payload, created_at AS createdAt FROM ai_summaries WHERE item_key = ?'
+    ).get(String(itemKey));
+    if (!row) return null;
+    try {
+      return { provider: row.provider, createdAt: row.createdAt, ...JSON.parse(row.payload) };
+    } catch {
+      return null;
+    }
+  }
+
+  cacheSummary(itemKey, provider, payload) {
+    this.database.prepare(`
+      INSERT INTO ai_summaries(item_key, provider, payload_json, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(item_key) DO UPDATE SET
+        provider = excluded.provider, payload_json = excluded.payload_json,
+        created_at = excluded.created_at
+    `).run(String(itemKey), String(provider), JSON.stringify(payload), new Date().toISOString());
+  }
+
+  /** Reading stats: items with recorded progress, most recent first. */
+  readingStats(limit = 20) {
+    const rows = this.database.prepare(`
+      SELECT rp.item_key AS itemKey, rp.scroll_percent AS percent, rp.updated_at AS updatedAt
+      FROM reading_progress rp
+      WHERE rp.scroll_percent > 0
+      ORDER BY datetime(rp.updated_at) DESC LIMIT ?
+    `).all(Math.min(100, Math.max(1, Number(limit) || 20)));
+    const started = this.database.prepare(
+      'SELECT COUNT(*) AS n FROM reading_progress WHERE scroll_percent > 0'
+    ).get().n;
+    const finished = this.database.prepare(
+      'SELECT COUNT(*) AS n FROM reading_progress WHERE scroll_percent >= 95'
+    ).get().n;
+    return { started, finished, recent: rows };
   }
 
   saveFormula(latex, itemKey = null) {

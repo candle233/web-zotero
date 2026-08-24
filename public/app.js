@@ -22,6 +22,7 @@ const I18N = {
     addToLibrary: n => `➕ 加入文献库（${n} 条）`, importedToast: n => `已导入 ${n} 条`,
     noteDeleted: '笔记已删除', deleted: '已删除', citationCopied: '引用已复制',
     nothingToCopy: '还没有可复制的内容。', exportedFmt: f => `已导出 ${f.toUpperCase()}`,
+    readingStats: '📊 阅读统计', startedN: n => `已读 ${n} 篇`, finishedN: n => `读完 ${n} 篇`,
     signOut: '登录'
   },
   en: {
@@ -43,6 +44,7 @@ const I18N = {
     addToLibrary: n => `➕ Add to library (${n})`, importedToast: n => `Imported ${n}`,
     noteDeleted: 'Note deleted', deleted: 'Deleted', citationCopied: 'Citation copied',
     nothingToCopy: 'Nothing to copy yet.', exportedFmt: f => `Exported ${f.toUpperCase()}`,
+    readingStats: '📊 Reading stats', startedN: n => `${n} started`, finishedN: n => `${n} finished`,
     signOut: 'Sign in'
   }
 };
@@ -1177,9 +1179,44 @@ document.addEventListener('keydown', event => {
   }
 });
 
+async function loadReadingStats() {
+  const body = document.getElementById('readingStatsBody');
+  if (!body) return;
+  try {
+    const stats = await request('/api/stats/reading?limit=8');
+    body.replaceChildren();
+    const counts = document.createElement('div');
+    counts.className = 'muted-count';
+    counts.textContent = `${tr('startedN', stats.started)} · ${tr('finishedN', stats.finished)}`;
+    body.append(counts);
+    for (const entry of stats.recent) {
+      const line = document.createElement('div');
+      line.className = 'stat-line';
+      const title = document.createElement('span');
+      title.className = 'stat-title';
+      title.textContent = entry.title;
+      title.title = entry.title;
+      const percent = document.createElement('span');
+      percent.textContent = `${Math.round(entry.percent)}%`;
+      const barWrap = document.createElement('span');
+      barWrap.style.flex = '0 0 40px';
+      const bar = document.createElement('div');
+      bar.className = 'stat-bar';
+      bar.style.width = `${Math.min(100, Math.max(2, entry.percent))}%`;
+      barWrap.append(bar);
+      line.append(title, barWrap, percent);
+      line.addEventListener('click', () => openItem(entry.itemKey));
+      line.style.cursor = 'pointer';
+      body.append(line);
+    }
+  } catch {
+    body.replaceChildren(Object.assign(document.createElement('div'), { className: 'muted-count', textContent: '—' }));
+  }
+}
+
 (async function init() {
   try {
-    await Promise.all([loadCollections(), loadTags(), loadItems()]);
+    await Promise.all([loadCollections(), loadTags(), loadItems(), loadReadingStats().catch(() => {})]);
     renderCollections();
     const index = await request('/api/search?q=');
     setStatus(`Ready · ${state.total} library items · index ${index.index.indexed}`);

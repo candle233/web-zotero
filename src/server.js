@@ -48,6 +48,8 @@ const ZOTERO_PROFILE_ROOT = process.env.ZOTERO_PROFILE_ROOT ||
   })();
 const WEB_PASSWORD = process.env.WEB_PASSWORD || '';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+// OpenAI-compatible endpoint; point at Ollama (e.g. http://127.0.0.1:11434/v1) for local models.
+const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.openai.com/v1';
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const zoteroDatabase = new ZoteroDatabase();
@@ -566,7 +568,8 @@ async function handleApi(request, response, url) {
         itemKey: typeof body.itemKey === 'string' && body.itemKey ? body.itemKey : null,
         semanticIndex,
         apiKey: OPENAI_API_KEY,
-        model: process.env.OPENAI_MODEL
+        model: process.env.OPENAI_MODEL,
+        baseUrl: AI_BASE_URL
       });
       return sendJson(response, 200, result);
     } catch (error) {
@@ -599,6 +602,16 @@ async function handleApi(request, response, url) {
     if (request.method === 'GET') return sendJson(response, 200, webStore.getProgress(itemKey));
     const body = await readJson(request);
     return sendJson(response, 200, webStore.saveProgress(itemKey, body.percent));
+  }
+
+  if (pathname === '/api/stats/reading' && request.method === 'GET') {
+    const stats = webStore.readingStats(url.searchParams.get('limit'));
+    // Attach titles for display.
+    for (const entry of stats.recent) {
+      const item = zoteroDatabase.getItemByKey(entry.itemKey);
+      entry.title = item ? item.title : (webStore.getImported(entry.itemKey)?.title ?? entry.itemKey);
+    }
+    return sendJson(response, 200, stats);
   }
 
   if (pathname === '/api/tags' && request.method === 'GET') {
@@ -656,6 +669,11 @@ async function handleApi(request, response, url) {
     if (!detail) return sendJson(response, 404, { error: 'Item not found' });
     const attachment = detail.attachments.find(file => file.exists);
     if (!attachment) return sendJson(response, 409, { error: 'This item has no available PDF.' });
+    const refresh = url.searchParams.get('refresh') === '1';
+    if (!refresh) {
+      const cached = webStore.getCachedSummary(detail.key);
+      if (cached) return sendJson(response, 200, { ...cached, cached: true });
+    }
     let extracted;
     try {
         extracted = await fsp.readFile(path.join(zoteroDatabase.storagePath, attachment.key, '.zotero-ft-cache'), 'utf8');
@@ -668,13 +686,20 @@ async function handleApi(request, response, url) {
       text: extracted
     };
     try {
-      if (!OPENAI_API_KEY) return sendJson(response, 200, localSummary(input));
-      const summary = await openAiSummary({ ...input, apiKey: OPENAI_API_KEY, model: process.env.OPENAI_MODEL });
+      if (!OPENAI_API_KEY) {
+        const local = localSummary(input);
+        webStore.cacheSummary(detail.key, 'local', local);
+        return sendJson(response, 200, local);
+      }
+      const summary = await openAiSummary({ ...input, apiKey: OPENAI_API_KEY, model: process.env.OPENAI_MODEL, baseUrl: AI_BASE_URL });
+      webStore.cacheSummary(detail.key, summary.provider || 'openai', summary);
       return sendJson(response, 200, summary);
     } catch (error) {
       if (!OPENAI_API_KEY) return sendJson(response, 500, { error: error.message });
       try {
-        return sendJson(response, 200, { ...localSummary(input), warning: `OpenAI failed; local analysis used instead: ${error.message}` });
+        const fallback = { ...localSummary(input), warning: `OpenAI failed; local analysis used instead: ${error.message}` };
+        webStore.cacheSummary(detail.key, 'local', fallback);
+        return sendJson(response, 200, fallback);
       } catch (fallbackError) {
         return sendJson(response, 503, { error: fallbackError.message });
       }

@@ -255,3 +255,16 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 
 .pref-row { display: flex; gap: 6px; }
 .pref-row button { flex: 0 0 auto; padding: 5px 10px; }
+
+.reading-stats {
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.reading-stats summary { cursor: pointer; color: var(--muted); user-select: none; }
+.reading-stats .stat-line { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; }
+.reading-stats .stat-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%; }
+.reading-stats .stat-bar { height: 4px; border-radius: 2px; background: var(--accent); min-width: 2px; }
+.reading-stats .muted-count { color: var(--muted); font-size: 12px; }
