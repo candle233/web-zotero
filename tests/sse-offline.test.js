@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventBus } = require('../src/events');
 const { OfflineLibrary } = require('../src/offline');
+const { WebStore } = require('../src/web-store');
 
 test('EventBus replays buffered events newer than Last-Event-ID', () => {
   const bus = new EventBus();
