@@ -61,7 +61,8 @@ test('WebStore imported items: save, list, get, delete round-trip', () => {
   ]);
   const list = store.listImported().filter(item => item.key.startsWith('WEBTEST'));
   assert.equal(list.length, 2);
-  assert.equal(list[0].title, 'Imported B'); // newest first
+  // Same-batch rows share one timestamp, so only assert membership here.
+  assert.deepEqual(list.map(item => item.title).sort(), ['Imported A', 'Imported B']);
   const detail = store.getImported('WEBTEST0001');
   assert.equal(detail.fields.DOI, '10.1/a');
   assert.deepEqual(detail.creators[0].lastName, 'Doe');
