@@ -71,6 +71,24 @@ npm run add-user -- colleague@example.com another-password --role viewer
 
 Roles: `owner` (manage users, full write), `editor` (read + write), `viewer` (read-only). Clients log in via `POST /api/auth` `{email, password}` and use the returned bearer token; `WEB_PASSWORD` keeps working as an owner-level operator password. Sessions expire after 30 days and can be revoked by deleting the user or changing their password.
 
+### Account self-service
+
+Signed-in users manage their own account without owner help:
+
+- `POST /api/me/password` `{currentPassword, newPassword}` — rotates the password and returns a fresh token (previous sessions are revoked)
+- `GET /api/me/sessions` — lists active sessions with a `current` flag
+- `DELETE /api/me/sessions/:ref` — revokes one session by its `ref`
+
+## Live sync & offline
+
+- Annotation changes stream to every open page over `GET /api/events` (SSE). Reconnecting clients send `Last-Event-ID` (or `?lastEventId=`) and receive everything they missed from a 200-event replay buffer; event ids are time-seeded so they stay monotonic across server restarts.
+- Offline PDF copies are manageable: save with `POST .../offline`, delete one copy with `DELETE /api/items/:key/files/:att/offline`, or clear an entire item with `DELETE /api/items/:key/offline`.
+
+## Library UI shortcuts
+
+- `/` focuses the search box · `Esc` closes search/reader overlays
+- `↑` / `↓` walk the library list
+
 ## Run
 
 ```powershell
