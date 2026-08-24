@@ -105,6 +105,33 @@ class ZoteroDatabase {
     return new Set(rows.map(row => row.itemID));
   }
 
+  /** Same idea for tag filtering: one query, Set of itemIDs. */
+  tagItemIds(tagName) {
+    const rows = this.database.prepare(`
+      SELECT it.itemID
+      FROM itemTags it
+      JOIN tags t ON t.tagID = it.tagID
+      JOIN items i ON i.itemID = it.itemID
+      LEFT JOIN deletedItems d ON d.itemID = i.itemID
+      WHERE t.name = ? COLLATE NOCASE AND d.itemID IS NULL
+    `).all(String(tagName));
+    return new Set(rows.map(row => row.itemID));
+  }
+
+  /** Distinct tags with usage counts, for the browse-by-tag UI. */
+  listTags() {
+    return this.database.prepare(`
+      SELECT t.name AS name, COUNT(DISTINCT it.itemID) AS count
+      FROM tags t
+      JOIN itemTags it ON it.tagID = t.tagID
+      JOIN items i ON i.itemID = it.itemID
+      LEFT JOIN deletedItems d ON d.itemID = i.itemID
+      WHERE d.itemID IS NULL
+      GROUP BY t.name
+      ORDER BY count DESC, t.name COLLATE NOCASE
+    `).all();
+  }
+
   itemDetail(key) {
     const summary = this.getItemByKey(key);
     if (!summary) return null;

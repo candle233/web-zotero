@@ -34,6 +34,15 @@
           <button id="lookupButton" class="ghost">Fetch</button>
         </div>
         <select id="collectionSelect" aria-label="Filter by collection"></select>
+        <div class="filter-row">
+          <select id="tagSelect" aria-label="Filter by tag"></select>
+          <select id="sortSelect" aria-label="Sort order">
+            <option value="dateModified">最近修改</option>
+            <option value="dateAdded">添加时间</option>
+            <option value="title">标题</option>
+            <option value="author">作者</option>
+          </select>
+        </div>
         <div class="button-row">
           <button id="searchButton" class="ghost">Refresh</button>
           <button id="reindexButton">Rebuild index</button>

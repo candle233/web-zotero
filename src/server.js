@@ -321,6 +321,43 @@ function itemMatchesQuery(item, query) {
   return `${item.title} ${item.creators.join(' ')}`.toLowerCase().includes(query);
 }
 
+const IMPORT_KEY_PREFIX = 'WEB';
+function nextImportKey() {
+  return `${IMPORT_KEY_PREFIX}${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+}
+
+const SORTERS = {
+  dateModified: (a, b) => String(b.dateModified || '').localeCompare(String(a.dateModified || '')),
+  dateAdded: (a, b) => String(b.dateAdded || '').localeCompare(String(a.dateAdded || '')),
+  title: (a, b) => a.title.localeCompare(b.title, 'zh-Hans-CN'),
+  author: (a, b) => (a.creators[0] || '').localeCompare(b.creators[0] || '', 'zh-Hans-CN')
+};
+
+function sortItems(items, sort) {
+  const sorter = SORTERS[sort] || SORTERS.dateModified;
+  return [...items].sort(sorter);
+}
+
+/** Shapes a web-imported record like an itemDetail for detail/export views. */
+function importedDetail(key) {
+  const imported = webStore.getImported(key);
+  if (!imported) return null;
+  return {
+    id: null,
+    key: imported.key,
+    title: imported.title,
+    itemType: imported.itemType,
+    creators: imported.creators,
+    fields: imported.fields,
+    tags: [],
+    collections: [],
+    notes: [],
+    annotations: [],
+    attachments: [],
+    imported: true
+  };
+}
+
 function normalizeCreators(creators) {
   return creators.map(person => [person.firstName, person.lastName].filter(Boolean).join(' '));
 }
@@ -343,37 +380,76 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/api/items' && request.method === 'GET') {
     const items = await zoteroDatabase.refreshItems();
+    // Web-imported entries join the library (they have no PDFs/collections).
+    const combined = items.concat(webStore.listImported());
     const query = (url.searchParams.get('q') || '').toLowerCase().trim();
     const collectionId = Number(url.searchParams.get('collection'));
+    const tagName = (url.searchParams.get('tag') || '').trim();
     const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
     const limit = Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 200));
-    const filtered = query ? items.filter(item => itemMatchesQuery(item, query)) : items;
+    let filtered = query ? combined.filter(item => itemMatchesQuery(item, query)) : combined;
     const collectionIds = Number.isFinite(collectionId) && collectionId > 0
       ? zoteroDatabase.collectionItemIds(collectionId)
       : null;
-    const result = collectionIds
-      ? filtered.filter(item => collectionIds.has(item.id))
-      : filtered;
-    const page = result.slice(offset, offset + limit);
+    if (collectionIds) filtered = filtered.filter(item => !item.imported && collectionIds.has(item.id));
+    if (tagName) {
+      const taggedIds = zoteroDatabase.tagItemIds(tagName);
+      filtered = filtered.filter(item => !item.imported && taggedIds.has(item.id));
+    }
+    const sort = url.searchParams.get('sort') || 'dateModified';
+    filtered = sortItems(filtered, sort);
+    const page = filtered.slice(offset, offset + limit);
     return sendJson(response, 200, {
-      count: result.length,
-      total: result.length,
+      count: filtered.length,
+      total: filtered.length,
       offset,
       limit,
-      hasMore: offset + page.length < result.length,
+      hasMore: offset + page.length < filtered.length,
       items: page
     });
   }
 
+  // Batch import from BibTeX/RIS/identifier text into the web layer.
+  if (pathname === '/api/items/batch-import' && request.method === 'POST') {
+    const body = await readJson(request);
+    if (typeof body.input !== 'string' || !body.input.trim()) {
+      return sendJson(response, 400, { error: 'Field "input" (string) is required.' });
+    }
+    let resolved;
+    try {
+      resolved = await resolveIdentifier(body.input, { timeoutMs: Number(body.timeoutMs) || 12000 });
+    } catch (error) {
+      return sendJson(response, error.statusCode || 502, { error: error.message || 'Metadata resolution failed.' });
+    }
+    const records = (resolved.items && resolved.items.length ? resolved.items : [resolved.item]).map(item => ({
+      key: nextImportKey(),
+      itemType: item.itemType || 'journalArticle',
+      title: item.title || 'Untitled',
+      creators: item.creators || [],
+      fields: item.fields || {}
+    }));
+    webStore.saveImported(records);
+    return sendJson(response, 201, { imported: records.length, keys: records.map(record => record.key), source: resolved.source });
+  }
+
+  // Imported (web-layer) items may be removed; Zotero rows stay read-only.
+  if (/^\/api\/items\/[^/]+$/.test(pathname) && request.method === 'DELETE') {
+    const key = decodeURIComponent(pathname.split('/')[3]);
+    const result = webStore.deleteImported(key);
+    return result.deleted
+      ? sendJson(response, 200, result)
+      : sendJson(response, 403, { error: 'Zotero library items are read-only; only imported entries can be deleted.' });
+  }
+
   if (pathname.startsWith('/api/items/') && pathname.endsWith('/detail') && request.method === 'GET') {
     const key = decodeURIComponent(pathname.split('/')[3]);
-    const detail = zoteroDatabase.itemDetail(key);
+    const detail = zoteroDatabase.itemDetail(key) || importedDetail(key);
     return detail ? sendJson(response, 200, detail) : sendJson(response, 404, { error: 'Item not found' });
   }
 
   if (/^\/api\/items\/[^/]+\/export\.(json|csv|bib|txt|ris)$/.test(pathname) && request.method === 'GET') {
     const match = pathname.match(/^\/api\/items\/([^/]+)\/export\.(json|csv|bib|txt|ris)$/);
-    const detail = zoteroDatabase.itemDetail(decodeURIComponent(match[1]));
+    const detail = zoteroDatabase.itemDetail(decodeURIComponent(match[1])) || importedDetail(decodeURIComponent(match[1]));
     if (!detail) return sendJson(response, 404, { error: 'Item not found' });
     let body;
     let type;
@@ -509,6 +585,10 @@ async function handleApi(request, response, url) {
     if (request.method === 'GET') return sendJson(response, 200, webStore.getProgress(itemKey));
     const body = await readJson(request);
     return sendJson(response, 200, webStore.saveProgress(itemKey, body.percent));
+  }
+
+  if (pathname === '/api/tags' && request.method === 'GET') {
+    return sendJson(response, 200, { tags: zoteroDatabase.listTags() });
   }
 
   if (pathname === '/api/collections' && request.method === 'GET') {

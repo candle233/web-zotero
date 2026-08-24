@@ -51,3 +51,21 @@ test('OfflineLibrary.remove deletes one copy or the whole item folder', async ()
   assert.equal(sneaky.ok, true);
   assert.equal(fs.existsSync(path.join(dir, 'offline')), true);
 });
+
+test('WebStore imported items: save, list, get, delete round-trip', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'web-zotero-import-'));
+  const store = new WebStore(dir);
+  store.saveImported([
+    { key: 'WEBTEST0001', itemType: 'journalArticle', title: 'Imported A', creators: [{ firstName: 'J', lastName: 'Doe' }], fields: { DOI: '10.1/a' } },
+    { key: 'WEBTEST0002', itemType: 'book', title: 'Imported B', creators: [], fields: {} }
+  ]);
+  const list = store.listImported().filter(item => item.key.startsWith('WEBTEST'));
+  assert.equal(list.length, 2);
+  assert.equal(list[0].title, 'Imported B'); // newest first
+  const detail = store.getImported('WEBTEST0001');
+  assert.equal(detail.fields.DOI, '10.1/a');
+  assert.deepEqual(detail.creators[0].lastName, 'Doe');
+  assert.equal(store.deleteImported('WEBTEST0001').deleted, true);
+  assert.equal(store.deleteImported('WEBTEST0001').deleted, false);
+  store.database.close();
+});

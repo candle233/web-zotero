@@ -19,6 +19,14 @@ class WebStore {
         scroll_percent REAL NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS web_items (
+        key           TEXT PRIMARY KEY,
+        item_type     TEXT NOT NULL DEFAULT 'journalArticle',
+        title         TEXT NOT NULL,
+        creators_json TEXT NOT NULL DEFAULT '[]',
+        fields_json   TEXT NOT NULL DEFAULT '{}',
+        imported_at   TEXT NOT NULL
+      );
     `);
     // Rich-text notes (R7): sanitized TipTap HTML alongside the plain-text column.
     try {
@@ -48,6 +56,73 @@ class WebStore {
     const existed = Boolean(this.getNote(itemKey).updatedAt);
     this.database.prepare('DELETE FROM web_notes WHERE item_key = ?').run(String(itemKey));
     return { ok: true, deleted: existed };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Web-layer imported items (batch BibTeX/RIS import): stored beside — never
+  // inside — the read-only Zotero database.
+  // ---------------------------------------------------------------------------
+
+  saveImported(records) {
+    const now = new Date().toISOString();
+    const insert = this.database.prepare(`
+      INSERT INTO web_items(key, item_type, title, creators_json, fields_json, imported_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET
+        item_type = excluded.item_type, title = excluded.title,
+        creators_json = excluded.creators_json, fields_json = excluded.fields_json,
+        imported_at = excluded.imported_at
+    `);
+    const saved = [];
+    for (const record of records) {
+      insert.run(
+        String(record.key),
+        String(record.itemType || 'journalArticle'),
+        String(record.title || 'Untitled').slice(0, 2000),
+        JSON.stringify(record.creators || []),
+        JSON.stringify(record.fields || {}),
+        now
+      );
+      saved.push(record.key);
+    }
+    return { ok: true, keys: saved, importedAt: now };
+  }
+
+  listImported() {
+    return this.database.prepare(`
+      SELECT key, item_type AS itemType, title, creators_json, fields_json, imported_at AS dateModified
+      FROM web_items ORDER BY datetime(imported_at) DESC
+    `).all().map(row => ({
+      id: null,
+      key: row.key,
+      title: row.title,
+      itemType: row.itemType,
+      creators: JSON.parse(row.creators_json).map(person =>
+        [person.firstName, person.lastName].filter(Boolean).join(' ') || person.name || ''),
+      pdfCount: 0,
+      noteCount: 0,
+      dateAdded: row.dateModified,
+      dateModified: row.dateModified,
+      imported: true
+    }));
+  }
+
+  getImported(key) {
+    const row = this.database.prepare(`
+      SELECT key, item_type AS itemType, title, creators_json, fields_json, imported_at AS importedAt
+      FROM web_items WHERE key = ?
+    `).get(String(key));
+    if (!row) return null;
+    return {
+      ...row,
+      creators: JSON.parse(row.creators_json),
+      fields: JSON.parse(row.fields_json)
+    };
+  }
+
+  deleteImported(key) {
+    const result = this.database.prepare('DELETE FROM web_items WHERE key = ?').run(String(key));
+    return { ok: true, deleted: Number(result.changes) > 0 };
   }
 
   saveProgress(itemKey, percent) {

@@ -239,3 +239,6 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 .login-error { color: #ff8d7a; min-height: 16px; margin: 0; font-size: 13px; }
 .login-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.filter-row { display: flex; gap: 6px; }
+.filter-row select { flex: 1; min-width: 0; }

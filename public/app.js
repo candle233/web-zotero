@@ -115,6 +115,23 @@ async function loadCollections() {
   state.collections = (await request('/api/collections')).collections;
 }
 
+async function loadTags() {
+  const select = document.getElementById('tagSelect');
+  if (!select) return;
+  try {
+    const { tags } = await request('/api/tags');
+    select.innerHTML = '<option value="">全部标签</option>';
+    for (const tag of tags.slice(0, 200)) {
+      const option = document.createElement('option');
+      option.value = tag.name;
+      option.textContent = `${tag.name} (${tag.count})`;
+      select.append(option);
+    }
+  } catch {
+    select.innerHTML = '<option value="">标签不可用</option>';
+  }
+}
+
 const PAGE_SIZE = 200;
 
 async function logout() {
@@ -127,9 +144,13 @@ async function logout() {
 async function loadItems({ append = false } = {}) {
   const query = encodeURIComponent(elements.searchInput.value.trim());
   const collection = document.getElementById('collectionSelect').value;
+  const tag = document.getElementById('tagSelect')?.value || '';
+  const sort = document.getElementById('sortSelect')?.value || 'dateModified';
   const params = new URLSearchParams();
   if (query) params.set('q', query);
   if (collection) params.set('collection', collection);
+  if (tag) params.set('tag', tag);
+  params.set('sort', sort);
   if (append) params.set('offset', String(state.items.length));
   params.set('limit', String(PAGE_SIZE));
   const data = await request(`/api/items?${params}`);
@@ -294,6 +315,18 @@ function renderDetail(item) {
     actionButton('JSON metadata', () => exportItem(item, 'json'))
   );
   card.append(exportPanel);
+  if (item.imported) {
+    card.append(actionButton('🗑 删除此导入条目', async () => {
+      if (!window.confirm(`删除导入的「${item.title}」？`)) return;
+      try {
+        await request(`/api/items/${encodeURIComponent(item.key)}`, { method: 'DELETE' });
+        showToast('已删除');
+        state.activeKey = null;
+        elements.detailBody.innerHTML = '';
+        await loadItems().catch(() => {});
+      } catch (error) { setStatus(error.message, true); }
+    }, 'ghost'));
+  }
   card.append(buildCitationPanel({ itemKey: item.key }));
 
   if (item.tags.length) {
@@ -756,6 +789,8 @@ elements.searchInput.addEventListener('input', debounce(async () => {
 }, 280));
 
 document.getElementById('collectionSelect').addEventListener('change', loadItems);
+document.getElementById('tagSelect')?.addEventListener('change', loadItems);
+document.getElementById('sortSelect')?.addEventListener('change', loadItems);
 elements.searchButton.addEventListener('click', async () => {
   elements.searchButton.disabled = true;
   try { await loadItems(); } catch (error) { setStatus(error.message, true); } finally { elements.searchButton.disabled = false; }
@@ -867,6 +902,22 @@ function renderLookupResult(result) {
     body.append(panel);
   }
   body.append(buildCitationPanel({ cslItems: records }));
+  // One-click import of everything just resolved (multi-record BibTeX/RIS too).
+  const importButton = actionButton(`➕ 加入文献库（${records.length} 条）`, async () => {
+    importButton.disabled = true;
+    try {
+      const result = await request('/api/items/batch-import', {
+        method: 'POST',
+        body: JSON.stringify({ input })
+      });
+      showToast(`已导入 ${result.imported} 条`);
+      await loadItems().catch(() => {});
+      loadTags().catch(() => {});
+    } catch (error) {
+      setStatus(error.message, true);
+    } finally { importButton.disabled = false; }
+  }, 'ghost');
+  body.append(importButton);
   const hint = document.createElement('p');
   hint.className = 'muted';
   hint.textContent = 'This library is a read-only companion to desktop Zotero — resolved metadata is shown here for reference and citation.';
@@ -1013,7 +1064,7 @@ document.addEventListener('keydown', event => {
 
 (async function init() {
   try {
-    await Promise.all([loadCollections(), loadItems()]);
+    await Promise.all([loadCollections(), loadTags(), loadItems()]);
     renderCollections();
     const index = await request('/api/search?q=');
     setStatus(`Ready · ${state.total} library items · index ${index.index.indexed}`);
