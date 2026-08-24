@@ -206,3 +206,36 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .pdf-fallback h3 { margin: 0; }
 .pdf-fallback p { margin: 0; font-size: 14px; }
 .pdf-fallback button { width: auto; }
+
+/* Login overlay (replaces prompt()-based sign-in) */
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 8, 15, 0.65);
+  backdrop-filter: blur(2px);
+}
+.login-card {
+  width: min(340px, calc(100vw - 32px));
+  background: var(--panel, #12161f);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 20px 22px;
+  display: grid;
+  gap: 12px;
+}
+.login-card h3 { margin: 0; }
+.login-card label { display: grid; gap: 5px; font-size: 13px; color: #9aa4b5; }
+.login-card input {
+  background: #0d1117;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  color: inherit;
+  padding: 9px 10px;
+  font-size: 14px;
+}
+.login-error { color: #ff8d7a; min-height: 16px; margin: 0; font-size: 13px; }
+.login-actions { display: flex; justify-content: flex-end; gap: 8px; }

@@ -14,7 +14,7 @@ const state = {
 };
 
 const elements = {};
-['searchInput','semanticToggle','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','pdfFallback','fallbackAnnotatorButton','fallbackNewTabButton','openAnnotatorButton','newTabButton','aiResult','askInput','askButton','summarizeButton','extractTextButton','searchResults','resultCount','resultList','toast','backButton','closeSearch','lookupInput','lookupButton','lookupBody','closeLookup','logoutButton']
+['searchInput','semanticToggle','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','pdfFallback','fallbackAnnotatorButton','fallbackNewTabButton','openAnnotatorButton','newTabButton','aiResult','askInput','askButton','summarizeButton','extractTextButton','searchResults','resultCount','resultList','toast','backButton','closeSearch','lookupInput','lookupButton','lookupBody','closeLookup','logoutButton','loginPanel','loginForm','loginEmailRow','loginEmail','loginPassword','loginError','loginCancel']
   .forEach(id => { elements[id] = document.getElementById(id); });
 
 function authHeaders(extra = {}) {
@@ -37,25 +37,57 @@ async function request(path, options = {}, { retried = false } = {}) {
   return payload;
 }
 
-async function login(mode) {
-  if (mode === 'users') {
-    const email = prompt('Email:') || '';
-    const password = email ? prompt('Password:') || '' : '';
-    if (!email) throw new Error('Login cancelled');
-    const result = await fetch('/api/auth', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ email, password }) });
-    const payload = await result.json().catch(() => ({}));
-    if (!result.ok) throw new Error(payload.error || 'Invalid credentials');
-    state.token = payload.token;
-    localStorage.setItem('web-zotero-token', payload.token);
-    return;
-  }
-  const password = prompt('Enter the remote access password:') || '';
-  if (!password) throw new Error('Login cancelled');
-  await fetch('/api/auth', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({password}) }).then(async result => {
-    if (!result.ok) throw new Error('Invalid password');
-    state.token = password;
-    localStorage.setItem('web-zotero-token', password);
+/**
+ * Shows the sign-in overlay and resolves with the stored token once
+ * authenticated; rejects when the user cancels.
+ */
+function showLogin(mode) {
+  return new Promise((resolve, reject) => {
+    const panel = elements.loginPanel;
+    if (!panel) { reject(new Error('Login cancelled')); return; }
+    elements.loginEmailRow.hidden = mode !== 'users';
+    elements.loginError.textContent = '';
+    panel.hidden = false;
+    (mode === 'users' ? elements.loginEmail : elements.loginPassword).focus();
+
+    const close = () => {
+      panel.hidden = true;
+      elements.loginForm.removeEventListener('submit', onSubmit);
+      elements.loginCancel.removeEventListener('click', onCancel);
+    };
+    const fail = message => { elements.loginError.textContent = message; };
+
+    async function onSubmit(event) {
+      event.preventDefault();
+      const email = elements.loginEmail.value.trim();
+      const password = elements.loginPassword.value;
+      if (!password) { fail('Password is required.'); return; }
+      try {
+        const result = await fetch('/api/auth', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(mode === 'users' ? { email, password } : { password })
+        });
+        const payload = await result.json().catch(() => ({}));
+        if (!result.ok) { fail(payload.error || 'Invalid credentials'); return; }
+        state.token = payload.token || password;
+        localStorage.setItem('web-zotero-token', state.token);
+        if (elements.logoutButton) elements.logoutButton.hidden = false;
+        close();
+        resolve(state.token);
+      } catch {
+        fail('Network error — is the server running?');
+      }
+    }
+    function onCancel() { close(); reject(new Error('Login cancelled')); }
+
+    elements.loginForm.addEventListener('submit', onSubmit);
+    elements.loginCancel.addEventListener('click', onCancel);
   });
+}
+
+async function login(mode) {
+  return showLogin(mode);
 }
 
 function setStatus(message, isError = false) {
@@ -941,6 +973,43 @@ function buildCitationPanel({ itemKey = null, cslItems = null }) {
   for (const control of [styleSelect, langSelect, modeSelect]) control.addEventListener('change', refresh);
   return panel;
 }
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts: "/" focuses search, Esc backs out of overlays,
+// ArrowUp/ArrowDown walk the library list.
+// ---------------------------------------------------------------------------
+document.addEventListener('keydown', event => {
+  const typing = event.target instanceof Element
+    && event.target.matches('input, textarea, select');
+  if (event.key === 'Escape') {
+    if (elements.searchResults.classList.contains('active')) {
+      elements.closeSearch.click();
+    } else if (state.view === 'reader') {
+      elements.backButton.click();
+    } else if (typing) {
+      event.target.blur();
+    }
+    return;
+  }
+  if (typing) return;
+  if (event.key === '/') {
+    event.preventDefault();
+    elements.searchInput.focus();
+    return;
+  }
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  if (!state.items.length) return;
+  event.preventDefault();
+  const currentIndex = state.items.findIndex(item => item.key === state.activeKey);
+  const nextIndex = event.key === 'ArrowDown'
+    ? Math.min(state.items.length - 1, currentIndex + 1)
+    : Math.max(0, currentIndex <= 0 ? 0 : currentIndex - 1);
+  const target = state.items[nextIndex];
+  if (target && target.key !== state.activeKey) {
+    openItem(target.key);
+    elements.library.querySelector(`[data-key="${target.key}"]`)?.scrollIntoView({ block: 'nearest' });
+  }
+});
 
 (async function init() {
   try {

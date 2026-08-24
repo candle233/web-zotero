@@ -94,6 +94,22 @@
     </main>
   </div>
   <div id="toast" class="toast"></div>
+  <div id="loginPanel" class="login-overlay" hidden>
+    <form id="loginForm" class="login-card">
+      <h3>Sign in</h3>
+      <label id="loginEmailRow">Email
+        <input id="loginEmail" type="email" placeholder="you@example.com" autocomplete="username">
+      </label>
+      <label>Password
+        <input id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password">
+      </label>
+      <p id="loginError" class="login-error" role="alert"></p>
+      <div class="login-actions">
+        <button type="button" id="loginCancel" class="ghost">Cancel</button>
+        <button type="submit" id="loginSubmit">Sign in</button>
+      </div>
+    </form>
+  </div>
   <script src="/app.js" defer></script>
 </body>
 </html>
