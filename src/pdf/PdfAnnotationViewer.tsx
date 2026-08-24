@@ -17,6 +17,8 @@ export interface PdfAnnotationViewerProps {
   onUpdate: (id: string, patch: Partial<PdfAnnotation>) => void | Promise<void>;
   onDelete: (id: string) => void | Promise<void>;
   onDocumentLoaded?: (info: { pages: number }) => void;
+  /** 1-based page to scroll to once the document and its pages are mounted. */
+  initialPage?: number;
   /**
    * Formula OCR (R10): receives a cropped PNG data URL of the region the
    * user dragged in formula mode, resolves to recognized LaTeX. Provided by
@@ -207,8 +209,23 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
     [props.onFormulaOcr],
   );
 
-  const locateAnnotation = useCallback((annotation: PdfAnnotation) => {
-    setSelectedId(annotation.id);
+  // Deep-link support (?page=N): mount enough pages, then scroll once.
+  const initialPageDone = useRef(false);
+  const initialPage = props.initialPage;
+  useEffect(() => {
+    if (!pdfDoc || !initialPage || initialPageDone.current) return;
+    if (initialPage > pageLimit) setPageLimit(initialPage + 10);
+    const frame = requestAnimationFrame(() => {
+      const target = scrollRef.current?.querySelector(`[data-page-index="${initialPage - 1}"]`);
+      if (target) {
+        target.scrollIntoView({ block: 'start' });
+        initialPageDone.current = true;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pdfDoc, pageLimit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const locateAnnotation = useCallback((annotation: PdfAnnotation) => {    setSelectedId(annotation.id);
     setFlashId(annotation.id);
     if (flashTimer.current) clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlashId(null), 1400);

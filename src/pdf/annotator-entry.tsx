@@ -272,6 +272,7 @@ function AnnotatorApp() {
         pdfUrl={`/api/items/${encodeURIComponent(itemKey)}/files/${encodeURIComponent(attachmentKey)}`}
         httpHeaders={token ? { authorization: `Bearer ${token}` } : undefined}
         workerUrl="/vendor/pdf.worker.min.mjs"
+        initialPage={Number(params.get('page')) || undefined}
         annotations={annotations}
         onCreate={annotation => {
           persist([...annotations, annotation]);

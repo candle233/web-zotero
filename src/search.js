@@ -104,9 +104,47 @@ class SearchIndex {
         ORDER BY score
         LIMIT ?
       `).all(matchQuery, Math.min(100, Math.max(1, limit)))
-        .map(row => ({ ...row, snippet: safeSnippet(row.snippet) }));
+        .map(row => ({ ...row, snippet: safeSnippet(row.snippet), pageIndex: this.detectPage(row.attachmentKey, row.snippet) }));
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * Best-effort 0-based page number for a snippet: Zotero's .zotero-ft-cache
+   * keeps form feeds as page separators, so locate the snippet text in the
+   * raw cache and count the form feeds before it. Returns null on any miss —
+   * callers must treat the field as optional.
+   */
+  detectPage(attachmentKey, snippetHtml) {
+    if (!attachmentKey || !this.zoteroDatabase?.storagePath) return null;
+    try {
+      const raw = fs.readFileSync(
+        path.join(this.zoteroDatabase.storagePath, String(attachmentKey), '.zotero-ft-cache'),
+        'utf8'
+      );
+      // \f -> space keeps every character offset identical (1:1 swap), so an
+      // index found here maps straight back onto `raw` for counting markers.
+      const finder = raw.replace(/[ \t\r\n\f]+/g, ' ');
+      const plain = snippetHtml.replace(/<mark>|<\/mark>/g, '').replace(/&[a-z0-9#]+;/gi, ' ');
+      const candidates = [];
+      for (const segment of plain.split('…')) {
+        const piece = segment.replace(/[ \t\r\n]+/g, ' ').trim();
+        if (piece.length >= 12) candidates.push(piece.slice(0, 100));
+      }
+      let index = -1;
+      for (const candidate of candidates) {
+        index = finder.indexOf(candidate);
+        if (index >= 0) break;
+        if (candidate.length > 24) {
+          index = finder.indexOf(candidate.slice(0, 24));
+          if (index >= 0) break;
+        }
+      }
+      if (index < 0) return null;
+      return raw.slice(0, index).split('\f').length - 1;
+    } catch {
+      return null;
     }
   }
 }

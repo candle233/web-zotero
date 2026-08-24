@@ -763,8 +763,15 @@ function renderSearch(data) {
     const snippet = document.createElement('div');
     snippet.className = 'result-snippet';
     snippet.innerHTML = result.snippet;
-    button.append(title, snippet);
-    button.addEventListener('click', () => openReader(result.itemKey, result.attachmentKey, result.title));
+    const meta = document.createElement('div');
+    meta.className = 'muted';
+    meta.textContent = result.pageIndex != null ? `第 ${result.pageIndex + 1} 页` : '';
+    button.append(title, snippet, meta);
+    // Deep-link into the annotator at the matched page when we know it.
+    button.addEventListener('click', () => {
+      const target = annotatorUrl(result.itemKey, result.attachmentKey, result.title);
+      window.location.href = result.pageIndex != null ? `${target}&page=${result.pageIndex + 1}` : target;
+    });
     elements.resultList.append(button);
   }
   if (!data.results.length) elements.resultList.innerHTML = '<div class="empty">No indexed PDF matches this phrase.</div>';
