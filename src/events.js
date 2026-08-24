@@ -9,11 +9,15 @@
  * callbacks so the HTTP server can shut down cleanly while streams are open.
  */
 
-let nextEventId = 1;
+// Seeded from boot time so ids stay monotonic across server restarts; a
+// reconnecting client's Last-Event-ID never collides with a fresh stream.
+let nextEventId = Date.now();
+const REPLAY_BUFFER_LIMIT = 200;
 
 class EventBus {
   constructor() {
     this.subscribers = new Set(); // { send(event), close() }
+    this.recent = [];             // ring buffer for Last-Event-ID replay
   }
 
   get subscriberCount() {
@@ -23,16 +27,33 @@ class EventBus {
   /**
    * Registers a subscriber. `send` receives {id, type, payload} and must
    * return false (or throw) when the underlying connection is gone.
+   * `lastEventId`: replays buffered events newer than it before going live,
+   * so a reconnecting EventSource misses nothing during the gap.
    * `close` option: called by closeAll() during server shutdown.
    */
-  subscribe(send, { close = null } = {}) {
+  subscribe(send, { close = null, lastEventId = null } = {}) {
     const subscriber = { send, close };
+    // Absent id = fresh connection (no history); an explicit number — even 0,
+    // "seen nothing" — replays every buffered event newer than it.
+    if (lastEventId != null) {
+      for (const event of this.recent) {
+        if (event.id <= lastEventId) continue;
+        try {
+          const alive = subscriber.send(event);
+          if (alive === false) return () => {};
+        } catch {
+          return () => {};
+        }
+      }
+    }
     this.subscribers.add(subscriber);
     return () => this.subscribers.delete(subscriber);
   }
 
   publish(type, payload) {
     const event = { id: nextEventId++, type, payload };
+    this.recent.push(event);
+    if (this.recent.length > REPLAY_BUFFER_LIMIT) this.recent.splice(0, this.recent.length - REPLAY_BUFFER_LIMIT);
     for (const subscriber of [...this.subscribers]) {
       try {
         const alive = subscriber.send(event);

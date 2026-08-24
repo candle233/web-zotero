@@ -484,15 +484,24 @@ async function handleApi(request, response, url) {
     }
   }
 
-  if (/^\/api\/items\/[^/]+\/files\/[^/]+\/offline$/.test(pathname) && request.method === 'POST') {
+  if (/^\/api\/items\/[^/]+\/files\/[^/]+\/offline$/.test(pathname)) {
     const [, , , itemKey, , attachmentKey] = pathname.split('/');
-    const pdf = zoteroDatabase.resolvePdf(decodeURIComponent(itemKey), decodeURIComponent(attachmentKey));
-    if (!pdf) return sendJson(response, 404, { error: 'PDF not found' });
-    return sendJson(response, 200, await offlineLibrary.save(pdf.itemKey || decodeURIComponent(itemKey), pdf.key, pdf.filePath));
+    if (request.method === 'POST') {
+      const pdf = zoteroDatabase.resolvePdf(decodeURIComponent(itemKey), decodeURIComponent(attachmentKey));
+      if (!pdf) return sendJson(response, 404, { error: 'PDF not found' });
+      return sendJson(response, 200, await offlineLibrary.save(pdf.itemKey || decodeURIComponent(itemKey), pdf.key, pdf.filePath));
+    }
+    if (request.method === 'DELETE') {
+      return sendJson(response, 200, await offlineLibrary.remove(decodeURIComponent(itemKey), decodeURIComponent(attachmentKey)));
+    }
   }
 
   if (pathname === '/api/offline' && request.method === 'GET') {
     return sendJson(response, 200, { offline: await offlineLibrary.listDetailed() });
+  }
+
+  if (/^\/api\/items\/[^/]+\/offline$/.test(pathname) && request.method === 'DELETE') {
+    return sendJson(response, 200, await offlineLibrary.remove(decodeURIComponent(pathname.split('/')[3])));
   }
 
   if (/^\/api\/items\/[^/]+\/progress$/.test(pathname)) {
@@ -763,6 +772,8 @@ async function handleApi(request, response, url) {
   }
 
   // Server-Sent Events stream: live annotation sync for connected pages.
+  // EventSource sends Last-Event-ID on reconnect; the query param covers
+  // first-load replay requests from the annotator.
   if (pathname === '/api/events' && request.method === 'GET') {
     response.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
@@ -771,12 +782,16 @@ async function handleApi(request, response, url) {
       'x-accel-buffering': 'no'
     });
     response.write('retry: 5000\n\n');
+    const rawLastEventId = request.headers['last-event-id'] ?? url.searchParams.get('lastEventId');
+    const lastEventId = rawLastEventId == null || rawLastEventId === ''
+      ? null
+      : (Number(rawLastEventId) || null);
     const unsubscribe = eventBus.subscribe(
       event => {
         response.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event.payload)}\n\n`);
         return true;
       },
-      { close: () => response.destroy() }
+      { close: () => response.destroy(), lastEventId }
     );
     const heartbeat = setInterval(() => {
       try {
