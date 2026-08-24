@@ -22,7 +22,7 @@ const { OfflineLibrary } = require('./offline');
 const { resolveIdentifier } = require('./metadata');
 const { recognizeFormula } = require('./formula-ocr');
 const { formatCitations, listStyles } = require('./citation-service');
-const { UserStore } = require('./users');
+const { UserStore, hashToken } = require('./users');
 const { WebAnnotationStore } = require('./annotations-store');
 const { sanitizeNoteHtml, noteHtmlToPlainText } = require('./notes-html');
 const { SemanticIndex } = require('./semantic');
@@ -696,6 +696,36 @@ async function handleApi(request, response, url) {
         ? { email: effective.user.email, displayName: effective.user.displayName, role: effective.user.role }
         : null
     });
+  }
+
+  // Self-service account management (user mode only).
+  if (pathname === '/api/me/password' && request.method === 'POST') {
+    if (!effective.user) return sendJson(response, 400, { error: 'Password changes require a user account (not legacy/open mode).' });
+    const body = await readJson(request);
+    try {
+      const result = userStore.changePassword(effective.user.id, body.currentPassword, body.newPassword);
+      // Other sessions of this user are stale after a rotation.
+      userStore.revokeUserSessions(effective.user.id);
+      const fresh = userStore.issueToken(effective.user);
+      return sendJson(response, 200, { ...result, token: fresh });
+    } catch (error) {
+      return sendJson(response, error.statusCode || 500, { error: error.message });
+    }
+  }
+
+  if (pathname === '/api/me/sessions' && request.method === 'GET') {
+    if (!effective.user) return sendJson(response, 400, { error: 'Session management requires a user account.' });
+    const currentHash = principal?.token ? hashToken(principal.token) : null;
+    return sendJson(response, 200, { sessions: userStore.listSessions(effective.user.id, currentHash) });
+  }
+
+  if (/^\/api\/me\/sessions\/[^/]+$/.test(pathname) && request.method === 'DELETE') {
+    if (!effective.user) return sendJson(response, 400, { error: 'Session management requires a user account.' });
+    try {
+      return sendJson(response, 200, userStore.revokeSession(effective.user.id, decodeURIComponent(pathname.split('/')[4])));
+    } catch (error) {
+      return sendJson(response, error.statusCode || 500, { error: error.message });
+    }
   }
 
   if (pathname === '/api/users' && request.method === 'GET') {

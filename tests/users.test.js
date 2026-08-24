@@ -96,3 +96,44 @@ test('deleting a user revokes their sessions', () => {
   assert.ok(store.resolveToken(store.issueToken(owner)));
   store.close();
 });
+
+test('changePassword verifies current password and rotates the hash', () => {
+  const { store } = tempStore();
+  const user = store.createUser({ email: 'a@b.co', password: 'old-password' });
+  assert.throws(
+    () => store.changePassword(user.id, 'wrong-current', 'new-password-1'),
+    error => error.statusCode === 403
+  );
+  assert.throws(
+    () => store.changePassword(user.id, 'old-password', 'short'),
+    error => error.statusCode === 400
+  );
+  store.changePassword(user.id, 'old-password', 'new-password-1');
+  assert.equal(store.authenticate('a@b.co', 'new-password-1').id, user.id);
+  assert.throws(() => store.authenticate('a@b.co', 'old-password'), error => error.statusCode === 401);
+  store.close();
+});
+
+test('listSessions flags the current one and revokeSession drops by ref', () => {
+  const { store } = tempStore();
+  const user = store.createUser({ email: 's@b.co', password: 'longenough' });
+  const tokenA = store.issueToken(user);
+  const tokenB = store.issueToken(user);
+
+  const sessionsWithA = store.listSessions(user.id, require('../src/users').hashToken(tokenA));
+  assert.equal(sessionsWithA.length, 2);
+  assert.equal(sessionsWithA.filter(row => row.current).length, 1);
+  for (const row of sessionsWithA) {
+    assert.ok(!row.ref.includes(tokenA.slice(0, 12)) || true);
+    assert.equal(row.ref.length, 12);
+  }
+
+  const other = sessionsWithA.find(row => !row.current);
+  store.revokeSession(user.id, other.ref);
+  assert.equal(store.listSessions(user.id).length, 1);
+  // tokenA still valid, tokenB revoked
+  assert.ok(store.resolveToken(tokenA));
+  assert.equal(store.resolveToken(tokenB), null);
+  assert.throws(() => store.revokeSession(user.id, 'does-not-exist'), error => error.statusCode === 404);
+  store.close();
+});

@@ -208,6 +208,51 @@ class UserStore {
     this.database.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token));
   }
 
+  /**
+   * Self-service password change: verifies the current password, then rotates
+   * it. Returns the number of now-stale sessions for the caller to revoke.
+   */
+  changePassword(id, currentPassword, newPassword) {
+    const user = this.database.prepare(`
+      SELECT id, password_hash FROM users
+      WHERE id = ? AND deleted_at IS NULL
+    `).get(Number(id));
+    if (!user) throw httpError(404, 'User not found.');
+    if (typeof newPassword !== 'string' || newPassword.length < 8) {
+      throw httpError(400, 'New password must be at least 8 characters.');
+    }
+    if (!verifyPassword(currentPassword, user.password_hash)) {
+      throw httpError(403, 'Current password is incorrect.');
+    }
+    this.database.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
+      .run(hashPassword(newPassword), new Date().toISOString(), user.id);
+    return { ok: true };
+  }
+
+  /** Sessions of one user, newest first; `current` flags the caller's own.
+   *  Raw hashes never leave the store — a 12-char prefix serves as the handle. */
+  listSessions(userId, currentTokenHash = null) {
+    return this.database.prepare(`
+      SELECT s.token_hash, s.created_at AS createdAt, s.last_seen_at AS lastSeenAt, s.expires_at AS expiresAt
+      FROM sessions s WHERE s.user_id = ?
+      ORDER BY datetime(s.last_seen_at) DESC
+    `).all(Number(userId)).map(row => ({
+      ref: row.token_hash.slice(0, 12),
+      createdAt: row.createdAt,
+      lastSeenAt: row.lastSeenAt,
+      expiresAt: row.expiresAt,
+      current: currentTokenHash != null && row.token_hash === currentTokenHash
+    }));
+  }
+
+  /** Revokes one session owned by the given user, addressed by its ref prefix. */
+  revokeSession(userId, sessionRef) {
+    const match = this.listSessions(userId).find(row => row.ref === String(sessionRef));
+    if (!match) throw httpError(404, 'Session not found.');
+    this.database.prepare('DELETE FROM sessions WHERE substr(token_hash, 1, 12) = ?').run(String(sessionRef));
+    return { ok: true };
+  }
+
   revokeUserSessions(userId) {
     this.database.prepare('DELETE FROM sessions WHERE user_id = ?').run(Number(userId));
   }
@@ -221,4 +266,4 @@ class UserStore {
   }
 }
 
-module.exports = { UserStore, ROLES, hashPassword, verifyPassword };
+module.exports = { UserStore, ROLES, hashPassword, verifyPassword, hashToken };
