@@ -535,16 +535,14 @@ async function handleApi(request, response, url) {
   if (pathname === '/api/index/rebuild' && request.method === 'POST') {
     const result = await searchIndex.reindex({ force: url.searchParams.get('force') === '1', limit: 100000 });
     if (result.started) {
-      setImmediate(() => {
-        try {
-          const semantic = semanticIndex.rebuild();
-          if (semantic.ready) {
-            console.log(`Semantic index built: ${semantic.chunks} chunks, ${semantic.items} items, ${semantic.terms} terms, dim ${semantic.dimensions}`);
-          }
-        } catch (error) {
-          console.error(`Semantic index rebuild failed: ${error.message}`);
+      // The LSA math runs in a worker thread; the server keeps answering.
+      semanticIndex.rebuildAsync().then(semantic => {
+        if (semantic.ready) {
+          console.log(`Semantic index built: ${semantic.chunks} chunks, ${semantic.items} items, ${semantic.terms} terms, dim ${semantic.dimensions}`);
+        } else if (semantic.reason || semantic.error) {
+          console.error(`Semantic index rebuild did not complete: ${semantic.reason || semantic.error}`);
         }
-      });
+      }).catch(error => console.error(`Semantic index rebuild failed: ${error.message}`));
     }
     return sendJson(response, result.started ? 200 : 202, result);
   }
@@ -856,15 +854,12 @@ async function main() {
   });
   setImmediate(() => searchIndex.reindex({ limit: 100000 }).then(result => {
     if (result.started) console.log(`Initial index complete: ${result.indexed} indexed, ${result.skipped} skipped`);
-    try {
-      const semantic = semanticIndex.rebuild();
-      if (semantic.ready) {
-        console.log(`Semantic index ready: ${semantic.chunks} chunks, ${semantic.items} items, ${semantic.terms} terms, dim ${semantic.dimensions}`);
-      } else if (semantic.reason) {
-        console.log(`Semantic index skipped: ${semantic.reason}`);
-      }
-    } catch (error) {
-      console.error(`Semantic index build failed: ${error.message}`);
+    return semanticIndex.rebuildAsync();
+  }).then(semantic => {
+    if (semantic.ready) {
+      console.log(`Semantic index ready: ${semantic.chunks} chunks, ${semantic.items} items, ${semantic.terms} terms, dim ${semantic.dimensions}`);
+    } else if (semantic.reason) {
+      console.log(`Semantic index skipped: ${semantic.reason}`);
     }
   }).catch(error => console.error(error.message)));
   const shutdown = () => {

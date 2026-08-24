@@ -216,6 +216,14 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
     pageElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, []);
 
+  // Clicking an existing highlight on the page opens the action toolbar
+  // (colors / note / delete) anchored at the click position.
+  const selectOnPage = useCallback((id: string, at: { x: number; y: number }) => {
+    if (!annotations.some(annotation => annotation.id === id)) return;
+    setSelectedId(id);
+    setToolbar({ x: at.x, y: at.y, annotationId: id });
+  }, [annotations]);
+
   const changeColor = useCallback(
     async (id: string, color: string) => {
       await props.onUpdate(id, { color });
@@ -317,7 +325,7 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
               annotations={annotations.filter(annotation => annotation.pageIndex === index)}
               selectedId={selectedId}
               flashId={flashId}
-                  onSelect={setSelectedId}
+                  onSelect={selectOnPage}
                   areaMode={areaMode}
                   formulaMode={formulaMode}
                   onAreaSelect={(rect, at) => void handleAreaSelect(index, rect, at)}
@@ -400,7 +408,7 @@ interface PdfPageViewProps {
   annotations: PdfAnnotation[];
   selectedId: string | null;
   flashId: string | null;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, at: { x: number; y: number }) => void;
   areaMode: boolean;
   formulaMode: boolean;
   onAreaSelect: (cssRect: Rect, at: { x: number; y: number }) => void;

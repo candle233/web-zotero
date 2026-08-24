@@ -141,7 +141,11 @@ function AnnotatorApp() {
       if (!row || row.itemKey !== itemKey || row.attachmentKey !== attachmentKey) return;
       if (payload.action === 'created') {
         setAnnotations(current =>
-          current.some(entry => entry.serverId === row.id) ? current : [...current, fromServer(row)]);
+          // Our own POST can race with this echo: skip when the server id is
+          // already present (either applied or pending replacement).
+          current.some(entry => entry.serverId === row.id || entry.id === `srv-${row.id}`)
+            ? current
+            : [...current, fromServer(row)]);
         setSyncStatus(`Live: annotation added${payload.by ? ` by ${payload.by}` : ''}`);
       } else {
         setAnnotations(current =>
@@ -184,9 +188,13 @@ function AnnotatorApp() {
         if (!response.ok) throw new Error(`${response.status}`);
         const payload = (await response.json()) as { annotation: ServerAnnotation & { rects: typeof annotation.rects } };
         setAnnotations(current => {
-          const next = current.map(entry =>
-            entry.id === annotation.id ? fromServer({ ...payload.annotation, rects: entry.rects }) : entry,
-          );
+          const next = current
+            // Drop any SSE-echo duplicate of this server id, then promote the
+            // local draft to its persisted identity (keeping local rects).
+            .filter(entry => entry.serverId !== payload.annotation.id)
+            .map(entry =>
+              entry.id === annotation.id ? fromServer({ ...payload.annotation, rects: entry.rects }) : entry,
+            );
           if (itemKey && attachmentKey) writeLocal(itemKey, attachmentKey, next);
           return next;
         });

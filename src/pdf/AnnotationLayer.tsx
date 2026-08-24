@@ -10,7 +10,7 @@ export interface AnnotationLayerProps {
   selectedId: string | null;
   /** Annotation currently playing the locate-flash animation. */
   flashId: string | null;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, at: { x: number; y: number }) => void;
 }
 
 /**
@@ -44,7 +44,7 @@ export function AnnotationLayer({ viewport, annotations, selectedId, flashId, on
               onMouseDown={event => {
                 event.preventDefault();
                 event.stopPropagation();
-                onSelect(annotation.id);
+                onSelect(annotation.id, { x: event.clientX, y: event.clientY });
               }}
             />
           );

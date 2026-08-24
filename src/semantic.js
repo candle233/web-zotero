@@ -12,6 +12,7 @@
  */
 
 const path = require('node:path');
+const { Worker } = require('node:worker_threads');
 const { DatabaseSync } = require('node:sqlite');
 
 function escapeHtml(value) {
@@ -115,8 +116,190 @@ function orthonormalizeColumns(matrix, rows, k, random) {
   }
 }
 
+'use strict';
+
+// ---------------------------------------------------------------------------
+// LSA compute + persist core (module level so a worker thread can run them).
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure compute: documents -> chunk rows -> TF-IDF matrix -> truncated SVD via
+ * subspace iteration. Deterministic (seeded PRNG). Returns the full result
+ * payload; persistence and in-memory application are separate steps.
+ */
+function computeLsa(documents, { iterations = 8 } = {}) {
+  const chunkRows = [];
+  for (const doc of documents) {
+    const chunks = chunkText(String(doc.text || '').slice(0, MAX_DOC_CHARS));
+    chunks.forEach((chunk, position) => chunkRows.push({
+      itemKey: doc.item_key, attachmentKey: doc.attachment_key,
+      title: doc.title || '', position, text: chunk.text
+    }));
+  }
+  if (chunkRows.length < MIN_CHUNKS) {
+    return { ready: false, chunks: chunkRows.length, reason: 'corpus too small for LSA' };
+  }
+
+  const k = Math.min(DEFAULT_K, Math.floor(chunkRows.length / 2));
+  const totalChunks = chunkRows.length;
+
+  // Term frequencies per chunk + document frequency.
+  const chunkTokens = chunkRows.map(chunk => {
+    const freq = new Map();
+    for (const token of tokenize(chunk.text)) freq.set(token, (freq.get(token) || 0) + 1);
+    return freq;
+  });
+  const df = new Map();
+  for (const freq of chunkTokens) {
+    for (const term of freq.keys()) df.set(term, (df.get(term) || 0) + 1);
+  }
+  const keptTerms = [...df.entries()].filter(([, count]) => count >= 2).map(([term]) => term)
+    .sort((a, b) => df.get(b) - df.get(a));
+  const termIndexMap = new Map(keptTerms.map((term, idx) => [term, idx]));
+  const vocab = keptTerms.length;
+
+  // Sparse weighted matrix A (terms x chunks), rows l2-normalized.
+  const ptr = new Int32Array(totalChunks + 1);
+  const idxOut = [];
+  const weightOut = [];
+  chunkTokens.forEach((freq, c) => {
+    let norm = 0;
+    const entries = [];
+    for (const [term, tf] of freq) {
+      const idx = termIndexMap.get(term);
+      if (idx === undefined) continue;
+      const w = (1 + Math.log(tf)) * Math.log(1 + totalChunks / df.get(term));
+      entries.push([idx, w]);
+      norm += w * w;
+    }
+    norm = Math.sqrt(norm);
+    for (const [idx, w] of entries) {
+      idxOut.push(idx);
+      weightOut.push(norm > 1e-12 ? w / norm : 0);
+    }
+    ptr[c + 1] = idxOut.length;
+  });
+  const colIdx = Int32Array.from(idxOut);
+  const colW = Float64Array.from(weightOut);
+
+  const random = mulberry32(0x5a4c3b2e);
+  const basis = new Float64Array(vocab * k);
+  for (let i = 0; i < basis.length; i += 1) basis[i] = random() - 0.5;
+  orthonormalizeColumns(basis, vocab, k, random);
+
+  const projectChunks = out => {
+    out.fill(0);
+    for (let c = 0; c < totalChunks; c += 1) {
+      const outBase = c * k;
+      for (let n = ptr[c]; n < ptr[c + 1]; n += 1) {
+        const t = colIdx[n];
+        const w = colW[n];
+        const inBase = t * k;
+        for (let j = 0; j < k; j += 1) out[outBase + j] += w * basis[inBase + j];
+      }
+    }
+  };
+  const backProject = (chunkSpace, out) => {
+    out.fill(0);
+    for (let c = 0; c < totalChunks; c += 1) {
+      const inBase = c * k;
+      for (let n = ptr[c]; n < ptr[c + 1]; n += 1) {
+        const t = colIdx[n];
+        const w = colW[n];
+        const outBase = t * k;
+        for (let j = 0; j < k; j += 1) out[outBase + j] += w * chunkSpace[inBase + j];
+      }
+    }
+  };
+
+  const chunkSpace = new Float64Array(totalChunks * k);
+  const nextBasis = new Float64Array(vocab * k);
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    projectChunks(chunkSpace);          // A^T X
+    backProject(chunkSpace, nextBasis); // A (A^T X)
+    basis.set(nextBasis);
+    orthonormalizeColumns(basis, vocab, k, random);
+  }
+  projectChunks(chunkSpace); // final V^T with unnormalized sigma scale
+
+  const sigma = new Float32Array(k);
+  for (let j = 0; j < k; j += 1) {
+    let sum = 0;
+    for (let c = 0; c < totalChunks; c += 1) sum += chunkSpace[c * k + j] * chunkSpace[c * k + j];
+    sigma[j] = Math.sqrt(sum);
+  }
+
+  const chunkVecs = chunkRows.map((row, c) => {
+    const vec = new Float32Array(k);
+    let norm = 0;
+    for (let j = 0; j < k; j += 1) {
+      vec[j] = sigma[j] > 1e-9 ? chunkSpace[c * k + j] / sigma[j] : 0;
+      norm += vec[j] * vec[j];
+    }
+    norm = Math.sqrt(norm);
+    if (norm > 1e-12) for (let j = 0; j < k; j += 1) vec[j] /= norm;
+    return { ...row, vec };
+  });
+
+  const itemAcc = new Map();
+  for (const chunk of chunkVecs) {
+    if (!itemAcc.has(chunk.itemKey)) {
+      itemAcc.set(chunk.itemKey, { attachmentKey: chunk.attachmentKey, title: chunk.title, vec: new Float64Array(k) });
+    }
+    const acc = itemAcc.get(chunk.itemKey);
+    for (let j = 0; j < k; j += 1) acc.vec[j] += chunk.vec[j];
+  }
+  const itemVecs = new Map();
+  for (const [itemKey, acc] of itemAcc) {
+    const vec = new Float32Array(k);
+    let norm = 0;
+    for (let j = 0; j < k; j += 1) norm += acc.vec[j] * acc.vec[j];
+    norm = Math.sqrt(norm);
+    for (let j = 0; j < k; j += 1) vec[j] = norm > 1e-12 ? acc.vec[j] / norm : 0;
+    itemVecs.set(itemKey, { attachmentKey: acc.attachmentKey, title: acc.title, vec });
+  }
+
+  return { ready: true, k, sigma, basis, termIndexMap, keptTerms, df, chunkVecs, itemVecs, totalChunks, vocab };
+}
+
+/** Writes a computeLsa() result inside one transaction. */
+function persistLsa(database, result) {
+  const { k, sigma, basis, keptTerms, df, chunkVecs, itemVecs } = result;
+  try {
+    database.exec('BEGIN IMMEDIATE');
+    database.exec('DELETE FROM meta; DELETE FROM terms; DELETE FROM chunks; DELETE FROM items;');
+    const meta = database.prepare('INSERT INTO meta(key, value) VALUES (?, ?)');
+    meta.run('k', k);
+    meta.run('chunkCount', chunkVecs.length);
+    meta.run('builtAt', new Date().toISOString());
+    meta.run('sigma', toBlob(sigma));
+    meta.run('basis', toBlob(Float32Array.from(basis)));
+    const insertTerm = database.prepare('INSERT INTO terms(term, idx, df) VALUES (?, ?, ?)');
+    keptTerms.forEach((term, idx) => insertTerm.run(term, idx, df.get(term)));
+    const insertChunk = database.prepare(
+      'INSERT INTO chunks(item_key, attachment_key, title, position, text, vec) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    for (const chunk of chunkVecs) {
+      insertChunk.run(chunk.itemKey, chunk.attachmentKey, chunk.title, chunk.position, chunk.text, toBlob(chunk.vec));
+    }
+    const insertItem = database.prepare(
+      'INSERT INTO items(item_key, attachment_key, title, vec) VALUES (?, ?, ?, ?)'
+    );
+    for (const [itemKey, item] of itemVecs) {
+      insertItem.run(itemKey, item.attachmentKey, item.title, toBlob(item.vec));
+    }
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+
+
 class SemanticIndex {
   constructor(dataDir, searchIndex) {
+    this.dataDir = dataDir;
     this.searchIndex = searchIndex;
     this.database = new DatabaseSync(path.join(dataDir, 'semantic-index.sqlite'));
     this.database.exec(`
@@ -190,187 +373,66 @@ class SemanticIndex {
   /**
    * Rebuilds the LSA space from the FTS corpus (search-index.documents).
    * Subspace iteration: X <- orth(A (A^T X)); sigma from the final A^T X norms.
+   * Synchronous variant kept for tests and small corpora; the server uses
+   * rebuildAsync() so the event loop never stalls during the math.
    */
   rebuild({ iterations = 8 } = {}) {
     if (this.building) return { started: false, message: 'Semantic indexing is already running.' };
     const documents = this.searchIndex.database
       .prepare('SELECT item_key, attachment_key, title, text FROM documents').all();
-    const chunkRows = [];
-    for (const doc of documents) {
-      const chunks = chunkText(String(doc.text || '').slice(0, MAX_DOC_CHARS));
-      chunks.forEach((chunk, position) => chunkRows.push({
-        itemKey: doc.item_key, attachmentKey: doc.attachment_key,
-        title: doc.title || '', position, text: chunk.text
-      }));
-    }
-    if (chunkRows.length < MIN_CHUNKS) {
-      return { started: true, ready: false, chunks: chunkRows.length, reason: 'corpus too small for LSA' };
-    }
     this.building = true;
     try {
-      const k = Math.min(DEFAULT_K, Math.floor(chunkRows.length / 2));
-      const totalChunks = chunkRows.length;
-
-      // Term frequencies per chunk + document frequency.
-      const chunkTokens = chunkRows.map(chunk => {
-        const freq = new Map();
-        for (const token of tokenize(chunk.text)) freq.set(token, (freq.get(token) || 0) + 1);
-        return freq;
-      });
-      const df = new Map();
-      for (const freq of chunkTokens) {
-        for (const term of freq.keys()) df.set(term, (df.get(term) || 0) + 1);
-      }
-      const keptTerms = [...df.entries()].filter(([, count]) => count >= 2).map(([term]) => term)
-        .sort((a, b) => df.get(b) - df.get(a));
-      const termIndexMap = new Map(keptTerms.map((term, idx) => [term, idx]));
-      const vocab = keptTerms.length;
-
-      // Sparse weighted matrix A (terms x chunks), rows l2-normalized.
-      const ptr = new Int32Array(totalChunks + 1);
-      const idxOut = [];
-      const weightOut = [];
-      chunkTokens.forEach((freq, c) => {
-        let norm = 0;
-        const entries = [];
-        for (const [term, tf] of freq) {
-          const idx = termIndexMap.get(term);
-          if (idx === undefined) continue;
-          const w = (1 + Math.log(tf)) * Math.log(1 + totalChunks / df.get(term));
-          entries.push([idx, w]);
-          norm += w * w;
-        }
-        norm = Math.sqrt(norm);
-        for (const [idx, w] of entries) {
-          idxOut.push(idx);
-          weightOut.push(norm > 1e-12 ? w / norm : 0);
-        }
-        ptr[c + 1] = idxOut.length;
-      });
-      const colIdx = Int32Array.from(idxOut);
-      const colW = Float64Array.from(weightOut);
-
-      const random = mulberry32(0x5a4c3b2e);
-      const basis = new Float64Array(vocab * k);
-      for (let i = 0; i < basis.length; i += 1) basis[i] = random() - 0.5;
-      orthonormalizeColumns(basis, vocab, k, random);
-
-      const projectChunks = out => {
-        out.fill(0);
-        for (let c = 0; c < totalChunks; c += 1) {
-          const outBase = c * k;
-          for (let n = ptr[c]; n < ptr[c + 1]; n += 1) {
-            const t = colIdx[n];
-            const w = colW[n];
-            const inBase = t * k;
-            for (let j = 0; j < k; j += 1) out[outBase + j] += w * basis[inBase + j];
-          }
-        }
-      };
-      const backProject = (chunkSpace, out) => {
-        out.fill(0);
-        for (let c = 0; c < totalChunks; c += 1) {
-          const inBase = c * k;
-          for (let n = ptr[c]; n < ptr[c + 1]; n += 1) {
-            const t = colIdx[n];
-            const w = colW[n];
-            const outBase = t * k;
-            for (let j = 0; j < k; j += 1) out[outBase + j] += w * chunkSpace[inBase + j];
-          }
-        }
-      };
-
-      const chunkSpace = new Float64Array(totalChunks * k);
-      const nextBasis = new Float64Array(vocab * k);
-      for (let iteration = 0; iteration < iterations; iteration += 1) {
-        projectChunks(chunkSpace);          // A^T X
-        backProject(chunkSpace, nextBasis); // A (A^T X)
-        basis.set(nextBasis);
-        orthonormalizeColumns(basis, vocab, k, random);
-      }
-      projectChunks(chunkSpace); // final V^T with unnormalized sigma scale
-
-      const sigma = new Float32Array(k);
-      for (let j = 0; j < k; j += 1) {
-        let sum = 0;
-        for (let c = 0; c < totalChunks; c += 1) sum += chunkSpace[c * k + j] * chunkSpace[c * k + j];
-        sigma[j] = Math.sqrt(sum);
-      }
-
-      const chunkVecs = chunkRows.map((row, c) => {
-        const vec = new Float32Array(k);
-        let norm = 0;
-        for (let j = 0; j < k; j += 1) {
-          vec[j] = sigma[j] > 1e-9 ? chunkSpace[c * k + j] / sigma[j] : 0;
-          norm += vec[j] * vec[j];
-        }
-        norm = Math.sqrt(norm);
-        if (norm > 1e-12) for (let j = 0; j < k; j += 1) vec[j] /= norm;
-        return { ...row, vec };
-      });
-
-      const itemAcc = new Map();
-      for (const chunk of chunkVecs) {
-        if (!itemAcc.has(chunk.itemKey)) {
-          itemAcc.set(chunk.itemKey, { attachmentKey: chunk.attachmentKey, title: chunk.title, vec: new Float64Array(k) });
-        }
-        const acc = itemAcc.get(chunk.itemKey);
-        for (let j = 0; j < k; j += 1) acc.vec[j] += chunk.vec[j];
-      }
-      const itemVecs = new Map();
-      for (const [itemKey, acc] of itemAcc) {
-        const vec = new Float32Array(k);
-        let norm = 0;
-        for (let j = 0; j < k; j += 1) norm += acc.vec[j] * acc.vec[j];
-        norm = Math.sqrt(norm);
-        for (let j = 0; j < k; j += 1) vec[j] = norm > 1e-12 ? acc.vec[j] / norm : 0;
-        itemVecs.set(itemKey, { attachmentKey: acc.attachmentKey, title: acc.title, vec });
-      }
-
-      this.persist(k, sigma, basis, keptTerms, df, chunkVecs, itemVecs);
-      this.k = k;
-      this.sigma = sigma;
-      this.basis = Float32Array.from(basis);
-      this.termIndex = termIndexMap;
-      this.termDf = new Map(keptTerms.map(term => [term, df.get(term)]));
-      this.chunkVectors = chunkVecs;
-      this.itemVectors = itemVecs;
+      const result = computeLsa(documents, { iterations });
+      if (!result.ready) return { started: true, ready: false, chunks: result.chunks, reason: result.reason };
+      persistLsa(this.database, result);
+      this.k = result.k;
+      this.sigma = result.sigma;
+      this.basis = Float32Array.from(result.basis);
+      this.termIndex = result.termIndexMap;
+      this.termDf = new Map(result.keptTerms.map(term => [term, result.df.get(term)]));
+      this.chunkVectors = result.chunkVecs;
+      this.itemVectors = result.itemVecs;
       this.ready = true;
-      return { started: true, ready: true, chunks: totalChunks, items: itemVecs.size, terms: vocab, dimensions: k };
+      return {
+        started: true, ready: true,
+        chunks: result.totalChunks, items: result.itemVecs.size,
+        terms: result.vocab, dimensions: result.k
+      };
     } finally {
       this.building = false;
     }
   }
 
-  persist(k, sigma, basis, terms, df, chunkVecs, itemVecs) {
-    try {
-      this.database.exec('BEGIN IMMEDIATE');
-      this.database.exec('DELETE FROM meta; DELETE FROM terms; DELETE FROM chunks; DELETE FROM items;');
-      const meta = this.database.prepare('INSERT INTO meta(key, value) VALUES (?, ?)');
-      meta.run('k', k);
-      meta.run('chunkCount', chunkVecs.length);
-      meta.run('builtAt', new Date().toISOString());
-      meta.run('sigma', toBlob(sigma));
-      meta.run('basis', toBlob(Float32Array.from(basis)));
-      const insertTerm = this.database.prepare('INSERT INTO terms(term, idx, df) VALUES (?, ?, ?)');
-      terms.forEach((term, idx) => insertTerm.run(term, idx, df.get(term)));
-      const insertChunk = this.database.prepare(
-        'INSERT INTO chunks(item_key, attachment_key, title, position, text, vec) VALUES (?, ?, ?, ?, ?, ?)'
-      );
-      for (const chunk of chunkVecs) {
-        insertChunk.run(chunk.itemKey, chunk.attachmentKey, chunk.title, chunk.position, chunk.text, toBlob(chunk.vec));
-      }
-      const insertItem = this.database.prepare(
-        'INSERT INTO items(item_key, attachment_key, title, vec) VALUES (?, ?, ?, ?)'
-      );
-      for (const [itemKey, item] of itemVecs) {
-        insertItem.run(itemKey, item.attachmentKey, item.title, toBlob(item.vec));
-      }
-      this.database.exec('COMMIT');
-    } catch (error) {
-      this.database.exec('ROLLBACK');
-      throw error;
-    }
+  /**
+   * Non-blocking rebuild: the TF-IDF + subspace-iteration math runs in a
+   * worker thread (its own SQLite connections), and in-memory state is
+   * refreshed from the database only when the worker reports success.
+   */
+  rebuildAsync({ iterations = 8 } = {}) {
+    if (this.building) return Promise.resolve({ started: false, message: 'Semantic indexing is already running.' });
+    this.building = true;
+    const finish = payload => {
+      this.building = false;
+      if (payload.ready) this.load();
+      return payload;
+    };
+    return new Promise(resolve => {
+      let settled = false;
+      const settle = payload => {
+        if (!settled) { settled = true; resolve(finish(payload)); }
+      };
+      const worker = new Worker(path.join(__dirname, 'semantic-worker.js'), {
+        workerData: { dataDir: this.dataDir, iterations }
+      });
+      worker.on('message', settle);
+      worker.on('error', error => {
+        console.error(`Semantic index worker failed: ${error.message}`);
+        settle({ started: true, ready: false, error: error.message });
+      });
+      worker.on('exit', code => {
+        if (code !== 0) settle({ started: true, ready: false, error: `worker exited with code ${code}` });
+      });
+    });
   }
 
   projectQuery(queryText) {
@@ -447,4 +509,4 @@ class SemanticIndex {
   }
 }
 
-module.exports = { SemanticIndex, tokenize, chunkText };
+module.exports = { SemanticIndex, computeLsa, persistLsa, tokenize, chunkText };
