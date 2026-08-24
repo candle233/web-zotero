@@ -174,7 +174,13 @@ function clearLoginFailures(ip) {
  */
 function resolvePrincipal(request, url) {
   const authorization = request.headers.authorization || '';
-  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : url.searchParams.get('token');
+  // Token sources, in order: Authorization: Bearer, ?token= (legacy clients),
+  // then the wz_token cookie set at login — so PDF iframes and EventSource
+  // authenticate without leaking tokens into URLs.
+  const cookieToken = /(?:^|;\s*)wz_token=([^;]+)/.exec(request.headers.cookie || '')?.[1];
+  const queryToken = url.searchParams.get('token');
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7)
+    : (queryToken || (cookieToken ? decodeURIComponent(cookieToken) : ''));
   const mode = authMode();
   if (token) {
     const user = userStore.resolveToken(token);
@@ -185,6 +191,14 @@ function resolvePrincipal(request, url) {
   }
   if (mode.mode === 'open') return { kind: 'open', user: null, role: 'owner' };
   return null;
+}
+
+const COOKIE_ATTRS = 'Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000';
+function issueAuthCookie(response, token) {
+  response.setHeader('set-cookie', `wz_token=${encodeURIComponent(token)}; ${COOKIE_ATTRS}`);
+}
+function clearAuthCookie(response) {
+  response.setHeader('set-cookie', `wz_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 }
 
 function sendJson(response, status, payload) {
@@ -746,7 +760,9 @@ async function handleApi(request, response, url) {
       try {
         const user = userStore.authenticate(body.email, body.password);
         clearLoginFailures(ip);
-        return sendJson(response, 200, { token: userStore.issueToken(user), user });
+        const token = userStore.issueToken(user);
+        issueAuthCookie(response, token);
+        return sendJson(response, 200, { token, user });
       } catch (error) {
         recordLoginFailure(ip);
         return sendJson(response, error.statusCode || 401, { error: error.message, auth: true });
@@ -760,11 +776,13 @@ async function handleApi(request, response, url) {
       return sendJson(response, 401, { error: 'Invalid password', auth: true, mode: mode.mode });
     }
     clearLoginFailures(ip);
+    issueAuthCookie(response, WEB_PASSWORD);
     return sendJson(response, 200, { ok: true, token: WEB_PASSWORD, user: { role: 'owner' } });
   }
 
   // Revokes the caller's session token (user mode); no-op for legacy/open.
   if (pathname === '/api/auth/logout' && request.method === 'POST') {
+    clearAuthCookie(response);
     if (principal?.kind === 'user' && principal.token) userStore.revokeToken(principal.token);
     return sendJson(response, 200, { ok: true });
   }

@@ -120,7 +120,7 @@ function AnnotatorApp() {
   // mutations are skipped via serverId matching (the server echoes them too).
   React.useEffect(() => {
     if (!itemKey || !attachmentKey) return;
-    const source = new EventSource(`/api/events${token ? `?token=${encodeURIComponent(token)}` : ''}`);
+    const source = new EventSource('/api/events');
     const onAnnotation = (rawEvent: Event) => {
       const payload = JSON.parse((rawEvent as MessageEvent).data) as {
         action: 'created' | 'updated' | 'deleted';

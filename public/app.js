@@ -610,8 +610,8 @@ async function openReader(key, attachmentKey, fileName = '') {
     showView('reader');
     elements.backButton.hidden = false;
     elements.pdfFallback.hidden = true;
-    let pdfUrl = `/api/items/${encodeURIComponent(key)}/files/${encodeURIComponent(attachmentKey)}#view=FitH`;
-    if (state.token) pdfUrl = pdfUrl.replace('#', `?token=${encodeURIComponent(state.token)}#`);
+    // Auth travels in the wz_token cookie; no token in the URL.
+    const pdfUrl = `/api/items/${encodeURIComponent(key)}/files/${encodeURIComponent(attachmentKey)}#view=FitH`;
     if (nativePdfViewerSupported()) {
       elements.pdfFrame.src = pdfUrl;
       detectIframePdfFailure();
@@ -827,8 +827,7 @@ function openAnnotatorForCurrent() {
 
 function openPdfInNewTab() {
   if (!state.activeKey || !state.activeAttachment) return;
-  const base = `/api/items/${encodeURIComponent(state.activeKey)}/files/${encodeURIComponent(state.activeAttachment)}`;
-  const url = state.token ? `${base}?token=${encodeURIComponent(state.token)}` : base;
+  const url = `/api/items/${encodeURIComponent(state.activeKey)}/files/${encodeURIComponent(state.activeAttachment)}`;
   window.open(url, '_blank', 'noopener');
 }
 
