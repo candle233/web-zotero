@@ -11,6 +11,16 @@
   --danger: #ff7a7a;
 }
 
+html[data-theme="light"] {
+  color-scheme: light;
+  --background: #f3f6fb;
+  --surface: #ffffff;
+  --surface-2: #e8edf6;
+  --border: #c9d4e8;
+  --text: #17233b;
+  --muted: #5a6b88;
+}
+
 * { box-sizing: border-box; }
 
 html, body { height: 100%; }
@@ -220,7 +230,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 }
 .login-card {
   width: min(340px, calc(100vw - 32px));
-  background: var(--panel, #12161f);
+  background: var(--surface);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 14px;
   padding: 20px 22px;
@@ -230,7 +240,7 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .login-card h3 { margin: 0; }
 .login-card label { display: grid; gap: 5px; font-size: 13px; color: #9aa4b5; }
 .login-card input {
-  background: #0d1117;
+  background: var(--background);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 8px;
   color: inherit;
@@ -242,3 +252,6 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 
 .filter-row { display: flex; gap: 6px; }
 .filter-row select { flex: 1; min-width: 0; }
+
+.pref-row { display: flex; gap: 6px; }
+.pref-row button { flex: 0 0 auto; padding: 5px 10px; }

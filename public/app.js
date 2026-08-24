@@ -1,5 +1,102 @@
 'use strict';
 
+// ---------------------------------------------------------------------------
+// i18n (zh default) + theme preference
+// ---------------------------------------------------------------------------
+const I18N = {
+  zh: {
+    searchPh: '搜索标题或全文', fetch: '获取', refresh: '刷新', reindex: '重建索引',
+    logout: '退出登录', tagline: '远程阅读、检索与标注', loadingLibrary: '正在加载文献库…',
+    allCollections: '全部合集', allTags: '全部标签', tagsUnavailable: '标签不可用',
+    sortDateModified: '最近修改', sortDateAdded: '添加时间', sortTitle: '标题', sortAuthor: '作者',
+    exportPanel: '导出', apaBtn: 'APA 引用', csvBtn: 'CSV 元数据', jsonBtn: 'JSON 元数据',
+    deleteImported: '🗑 删除此导入条目', tagsPanel: '标签', webNotes: '网页笔记',
+    saveNote: '保存笔记', notePlaceholder: '写点阅读笔记，保存在服务器上。',
+    richText: '✍️ 富文本编辑器', deleteNoteBtn: '🗑 删除笔记',
+    mentionedIn: '被提及于', zoteroNotes: 'Zotero 笔记', desktopAnn: '桌面端标注',
+    availablePdfs: '可用 PDF', filesPanel: '文件', noPdf: '没有可用的本地 PDF 附件。',
+    related: '相关论文', citationPreview: '引用预览', bibliography: '参考文献表', inText: '文中引用',
+    copy: '复制', aiReading: 'AI 精读', extract: '提取全文', annotatorBtn: '✏️ 标注器',
+    newTab: '↗ 新标签打开', loadMoreRemain: n => `加载更多（剩 ${n} 条）`,
+    noMatching: '没有匹配的条目。', itemsCount: n => `${n} 条`,
+    addToLibrary: n => `➕ 加入文献库（${n} 条）`, importedToast: n => `已导入 ${n} 条`,
+    noteDeleted: '笔记已删除', deleted: '已删除', citationCopied: '引用已复制',
+    nothingToCopy: '还没有可复制的内容。', exportedFmt: f => `已导出 ${f.toUpperCase()}`,
+    signOut: '登录'
+  },
+  en: {
+    searchPh: 'Search titles or full text', fetch: 'Fetch', refresh: 'Refresh', reindex: 'Rebuild index',
+    logout: 'Log out', tagline: 'Read, search, and annotate remotely', loadingLibrary: 'Loading library…',
+    allCollections: 'All collections', allTags: 'All tags', tagsUnavailable: 'Tags unavailable',
+    sortDateModified: 'Recently modified', sortDateAdded: 'Date added', sortTitle: 'Title', sortAuthor: 'Author',
+    exportPanel: 'Export', apaBtn: 'APA citation', csvBtn: 'CSV metadata', jsonBtn: 'JSON metadata',
+    deleteImported: '🗑 Delete imported item', tagsPanel: 'Tags', webNotes: 'Web notes',
+    saveNote: 'Save note', notePlaceholder: 'Write reading notes. Saved on this server.',
+    richText: '✍️ Rich text editor', deleteNoteBtn: '🗑 Delete note',
+    mentionedIn: '被提及于', zoteroNotes: 'Zotero 笔记', desktopAnn: '桌面端标注',
+    noteSaved: '笔记已保存', exportAnnotations: '导出标注',
+    availablePdfs: 'Available PDFs', filesPanel: 'Files', noPdf: 'No available local PDF attachment.',
+    related: 'Related papers', citationPreview: 'Citation preview', bibliography: 'Bibliography', inText: 'In-text',
+    copy: 'Copy', aiReading: 'AI reading', extract: 'Extract', annotatorBtn: '✏️ Annotator',
+    newTab: '↗ New tab', loadMoreRemain: n => `Load more (${n} remaining)`,
+    noMatching: 'No matching items.', itemsCount: n => `${n} items`,
+    addToLibrary: n => `➕ Add to library (${n})`, importedToast: n => `Imported ${n}`,
+    noteDeleted: 'Note deleted', deleted: 'Deleted', citationCopied: 'Citation copied',
+    nothingToCopy: 'Nothing to copy yet.', exportedFmt: f => `Exported ${f.toUpperCase()}`,
+    signOut: 'Sign in'
+  }
+};
+let lang = localStorage.getItem('web-zotero-lang') || 'zh';
+const tr = (key, ...args) => {
+  const value = (I18N[lang] || I18N.zh)[key] ?? I18N.zh[key] ?? key;
+  return typeof value === 'function' ? value(...args) : value;
+};
+
+function applyStaticI18n() {
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  for (const element of document.querySelectorAll('[data-i18n]')) {
+    const value = tr(element.dataset.i18n);
+    if (typeof value === 'string') element.textContent = value;
+  }
+  for (const element of document.querySelectorAll('[data-i18n-ph]')) {
+    element.placeholder = tr(element.dataset.i18nPh);
+  }
+}
+
+function applyTheme() {
+  document.documentElement.dataset.theme = localStorage.getItem('web-zotero-theme') || 'dark';
+}
+applyTheme();
+applyStaticI18n();
+
+document.getElementById('themeToggle')?.addEventListener('click', () => {
+  const next = (localStorage.getItem('web-zotero-theme') || 'dark') === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('web-zotero-theme', next);
+  applyTheme();
+});
+document.getElementById('langToggle')?.addEventListener('click', () => {
+  lang = lang === 'zh' ? 'en' : 'zh';
+  localStorage.setItem('web-zotero-lang', lang);
+  applyStaticI18n();
+  renderSortOptions();
+  loadItems().catch(() => {});
+});
+
+function renderSortOptions() {
+  const select = document.getElementById('sortSelect');
+  if (!select) return;
+  const current = select.value || 'dateModified';
+  select.innerHTML = '';
+  for (const [value, key] of [['dateModified', 'sortDateModified'], ['dateAdded', 'sortDateAdded'], ['title', 'sortTitle'], ['author', 'sortAuthor']]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = tr(key);
+    option.selected = value === current;
+    select.append(option);
+  }
+}
+renderSortOptions();
+
 const state = {
   token: localStorage.getItem('web-zotero-token') || '',
   items: [],
@@ -120,7 +217,11 @@ async function loadTags() {
   if (!select) return;
   try {
     const { tags } = await request('/api/tags');
-    select.innerHTML = '<option value="">全部标签</option>';
+    select.innerHTML = '';
+    const noneOption = document.createElement('option');
+    noneOption.value = '';
+    noneOption.textContent = tr('allTags');
+    select.append(noneOption);
     for (const tag of tags.slice(0, 200)) {
       const option = document.createElement('option');
       option.value = tag.name;
@@ -128,7 +229,11 @@ async function loadTags() {
       select.append(option);
     }
   } catch {
-    select.innerHTML = '<option value="">标签不可用</option>';
+    select.innerHTML = '';
+    const naOption = document.createElement('option');
+    naOption.value = '';
+    naOption.textContent = tr('tagsUnavailable');
+    select.append(naOption);
   }
 }
 
@@ -158,13 +263,13 @@ async function loadItems({ append = false } = {}) {
   state.total = data.total ?? data.count;
   state.hasMore = data.hasMore;
   renderLibrary();
-  setStatus(`${data.count} items`);
+  setStatus(tr('itemsCount', data.count));
 }
 
 function renderLibrary() {
   elements.library.innerHTML = '';
   if (!state.items.length) {
-    elements.library.innerHTML = '<div class="empty">No matching items.</div>';
+    elements.library.innerHTML = `<div class="empty">${tr('noMatching')}</div>`;
     return;
   }
   const fragment = document.createDocumentFragment();
@@ -191,7 +296,7 @@ function renderLibrary() {
   if (state.hasMore !== false && state.items.length < state.total) {
     const more = document.createElement('button');
     more.className = 'ghost load-more';
-    more.textContent = `Load more (${state.total - state.items.length} remaining)`;
+    more.textContent = tr('loadMoreRemain', state.total - state.items.length);
     more.disabled = state.loadingMore;
     more.addEventListener('click', async () => {
       state.loadingMore = true;
@@ -206,7 +311,11 @@ function renderLibrary() {
 
 function renderCollections() {
   const select = document.getElementById('collectionSelect');
-  select.innerHTML = '<option value="">All collections</option>';
+  select.innerHTML = '';
+  const allOption = document.createElement('option');
+  allOption.value = '';
+  allOption.textContent = tr('allCollections');
+  select.append(allOption);
   for (const collection of state.collections) {
     const option = document.createElement('option');
     option.value = collection.id;
@@ -245,7 +354,7 @@ async function exportItem(item, format) {
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     const extension = format === 'annotations' ? 'md' : format;
     downloadText(`${item.key}.${extension}`, await response.text());
-    showToast(`Exported ${format.toUpperCase()}`);
+    showToast(tr('exportedFmt', format));
   } catch (error) { setStatus(error.message, true); }
 }
 
@@ -306,27 +415,27 @@ function renderDetail(item) {
 
   const exportPanel = document.createElement('section');
   exportPanel.className = 'panel';
-  exportPanel.innerHTML = '<h3>Export</h3>';
+  exportPanel.innerHTML = `<h3>${tr('exportPanel')}</h3>`;
   exportPanel.append(
-    actionButton('APA citation', () => exportItem(item, 'txt')),
+    actionButton(tr('apaBtn'), () => exportItem(item, 'txt')),
     actionButton('BibTeX', () => exportItem(item, 'bib')),
     actionButton('RIS', () => exportItem(item, 'ris')),
-    actionButton('CSV metadata', () => exportItem(item, 'csv')),
-    actionButton('JSON metadata', () => exportItem(item, 'json'))
+    actionButton(tr('csvBtn'), () => exportItem(item, 'csv')),
+    actionButton(tr('jsonBtn'), () => exportItem(item, 'json'))
   );
-  card.append(exportPanel);
   if (item.imported) {
-    card.append(actionButton('🗑 删除此导入条目', async () => {
-      if (!window.confirm(`删除导入的「${item.title}」？`)) return;
+    card.append(actionButton(tr('deleteImported'), async () => {
+      if (!window.confirm(`「${item.title}」?`)) return;
       try {
         await request(`/api/items/${encodeURIComponent(item.key)}`, { method: 'DELETE' });
-        showToast('已删除');
+        showToast(tr('deleted'));
         state.activeKey = null;
         elements.detailBody.innerHTML = '';
         await loadItems().catch(() => {});
       } catch (error) { setStatus(error.message, true); }
-    }, 'ghost'));
+    }));
   }
+  card.append(exportPanel);
   card.append(buildCitationPanel({ itemKey: item.key }));
 
   if (item.tags.length) {
@@ -347,23 +456,23 @@ function renderDetail(item) {
 
   const notePanel = document.createElement('section');
   notePanel.className = 'panel';
-  notePanel.innerHTML = '<h3>Web notes</h3>';
+  notePanel.innerHTML = `<h3>${tr('webNotes')}</h3>`;
   const noteView = document.createElement('div');
   noteView.className = 'note-html';
   noteView.hidden = true;
   const noteArea = document.createElement('textarea');
   noteArea.className = 'note-area';
-  noteArea.placeholder = 'Write reading notes. Saved on this server.';
+  noteArea.placeholder = tr('notePlaceholder');
   const noteStatus = document.createElement('p');
   noteStatus.className = 'saved-note';
   const saveNote = document.createElement('button');
-  saveNote.textContent = 'Save note';
+  saveNote.textContent = tr('saveNote');
   saveNote.addEventListener('click', async () => {
     saveNote.disabled = true;
     try {
       const saved = await request(`/api/items/${item.key}/notes`, { method: 'POST', body: JSON.stringify({ content: noteArea.value }) });
       noteStatus.textContent = saved.updatedAt ? `Saved ${new Date(saved.updatedAt).toLocaleString()}` : '';
-      showToast('Note saved');
+      showToast(tr('noteSaved'));
     } catch (error) {
       setStatus(error.message, true);
     } finally { saveNote.disabled = false; }
@@ -371,7 +480,7 @@ function renderDetail(item) {
   notePanel.append(noteView, noteArea, saveNote, noteStatus);
   const deleteNote = document.createElement('button');
   deleteNote.className = 'ghost';
-  deleteNote.textContent = '🗑 Delete note';
+  deleteNote.textContent = tr('deleteNoteBtn');
   deleteNote.title = 'Remove the saved web note for this item';
   deleteNote.hidden = true;
   deleteNote.style.marginLeft = '7px';
@@ -386,7 +495,7 @@ function renderDetail(item) {
       saveNote.hidden = false;
       deleteNote.hidden = true;
       noteStatus.textContent = '';
-      showToast('Note deleted');
+      showToast(tr('noteDeleted'));
     } catch (error) {
       setStatus(error.message, true);
     }
@@ -394,7 +503,7 @@ function renderDetail(item) {
   notePanel.append(deleteNote);
   const richText = document.createElement('button');
   richText.className = 'ghost';
-  richText.textContent = '✍️ Rich text editor';
+  richText.textContent = tr('richText');
   richText.title = 'Open the TipTap rich-text note editor';
   richText.style.marginLeft = '7px';
   richText.addEventListener('click', () => {
@@ -420,9 +529,9 @@ function renderDetail(item) {
 
   const mentionsPanel = document.createElement('section');
   mentionsPanel.className = 'panel';
-  mentionsPanel.innerHTML = '<h3>Mentioned in</h3><div class="muted">Loading…</div>';
+  mentionsPanel.innerHTML = `<h3>${tr('mentionedIn')}</h3><div class="muted">…</div>`;
   request(`/api/items/${encodeURIComponent(item.key)}/mentions`).then(data => {
-    mentionsPanel.innerHTML = '<h3>Mentioned in</h3>';
+    mentionsPanel.innerHTML = `<h3>${tr('mentionedIn')}</h3>`;
     if (!data.mentions.length) {
       const hint = document.createElement('div');
       hint.className = 'muted';
@@ -443,13 +552,13 @@ function renderDetail(item) {
       button.addEventListener('click', () => openItem(mention.itemKey));
       mentionsPanel.append(button);
     }
-  }).catch(() => { mentionsPanel.innerHTML = '<h3>Mentioned in</h3>'; });
+  }).catch(() => { mentionsPanel.innerHTML = `<h3>${tr('mentionedIn')}</h3>`; });
   card.append(mentionsPanel);
 
   if (item.notes.length) {
     const panel = document.createElement('section');
     panel.className = 'panel';
-    panel.innerHTML = `<h3>Zotero notes (${item.notes.length})</h3>`;
+    panel.innerHTML = `<h3>${tr('zoteroNotes')} (${item.notes.length})</h3>`;
     for (const note of item.notes.slice(0, 8)) {
       const div = document.createElement('div');
       div.className = 'note-html';
@@ -462,7 +571,7 @@ function renderDetail(item) {
   if (item.annotations?.length) {
     const panel = document.createElement('section');
     panel.className = 'panel';
-    panel.innerHTML = `<h3>Desktop annotations (${item.annotations.length})</h3>`;
+    panel.innerHTML = `<h3>${tr('desktopAnn')} (${item.annotations.length})</h3>`;
     for (const annotation of item.annotations.slice(0, 20)) {
       const div = document.createElement('div');
       div.className = 'annotation';
@@ -475,14 +584,14 @@ function renderDetail(item) {
       div.append(text, meta);
       panel.append(div);
     }
-    panel.append(actionButton('Export annotations', () => exportItem(item, 'annotations')));
+    panel.append(actionButton(tr('exportAnnotations'), () => exportItem(item, 'annotations')));
     card.append(panel);
   }
 
   if (item.attachments.length) {
     const panel = document.createElement('section');
     panel.className = 'panel';
-    panel.innerHTML = `<h3>Available PDFs (${item.attachments.filter(file => file.exists).length})</h3>`;
+    panel.innerHTML = `<h3>${tr('availablePdfs')} (${item.attachments.filter(file => file.exists).length})</h3>`;
     for (const file of item.attachments.filter(candidate => candidate.exists)) {
       const row = document.createElement('div');
       row.style.display = 'flex';
@@ -496,7 +605,7 @@ function renderDetail(item) {
       const annotate = document.createElement('button');
       annotate.className = 'ghost';
       annotate.textContent = '✏️ Annotate';
-      annotate.title = 'Open in interactive annotator (highlight & note)';
+      annotate.title = tr('annotatorBtn');
       annotate.addEventListener('click', () => {
         const url = `/annotator?item=${encodeURIComponent(item.key)}&file=${encodeURIComponent(file.key)}&title=${encodeURIComponent(item.title || file.fileName)}`;
         window.open(url, '_blank', 'noopener');
@@ -508,16 +617,16 @@ function renderDetail(item) {
   } else {
     const panel = document.createElement('section');
     panel.className = 'panel';
-    panel.innerHTML = '<h3>Files</h3><div>No available local PDF attachment.</div>';
+    panel.innerHTML = `<h3>${tr('filesPanel')}</h3><div>${tr('noPdf')}</div>`;
     card.append(panel);
   }
 
   const relatedPanel = document.createElement('section');
   relatedPanel.className = 'panel';
-  relatedPanel.innerHTML = '<h3>Related papers</h3><div class="muted">Loading…</div>';
+  relatedPanel.innerHTML = `<h3>${tr('related')}</h3><div class="muted">…</div>`;
   card.append(relatedPanel);
   request(`/api/items/${encodeURIComponent(item.key)}/related`).then(data => {
-    relatedPanel.innerHTML = '<h3>Related papers</h3>';
+    relatedPanel.innerHTML = `<h3>${tr('related')}</h3>`;
     if (!data.related.length) {
       relatedPanel.innerHTML += '<div class="muted">No lexical matches yet.</div>';
       return;
@@ -536,7 +645,7 @@ function renderDetail(item) {
       button.addEventListener('click', () => openItem(related.key));
       relatedPanel.append(button);
     }
-  }).catch(error => { relatedPanel.innerHTML = '<h3>Related papers</h3>'; relatedPanel.append(Object.assign(document.createElement('div'), { className: 'muted', textContent: error.message })); });
+  }).catch(error => { relatedPanel.innerHTML = `<h3>${tr('related')}</h3>`; relatedPanel.append(Object.assign(document.createElement('div'), { className: 'muted', textContent: error.message })); });
 
   elements.detailBody.append(card);
 }
@@ -909,14 +1018,14 @@ function renderLookupResult(result) {
   }
   body.append(buildCitationPanel({ cslItems: records }));
   // One-click import of everything just resolved (multi-record BibTeX/RIS too).
-  const importButton = actionButton(`➕ 加入文献库（${records.length} 条）`, async () => {
+  const importButton = actionButton(tr('addToLibrary', records.length), async () => {
     importButton.disabled = true;
     try {
       const result = await request('/api/items/batch-import', {
         method: 'POST',
         body: JSON.stringify({ input })
       });
-      showToast(`已导入 ${result.imported} 条`);
+      showToast(tr('importedToast', result.imported));
       await loadItems().catch(() => {});
       loadTags().catch(() => {});
     } catch (error) {
@@ -938,7 +1047,7 @@ function renderLookupResult(result) {
 function buildCitationPanel({ itemKey = null, cslItems = null }) {
   const panel = document.createElement('section');
   panel.className = 'panel citation-panel';
-  panel.innerHTML = '<h3>Citation preview</h3>';
+  panel.innerHTML = `<h3>${tr('citationPreview')}</h3>`;
   const controls = document.createElement('div');
   controls.className = 'citation-controls';
   const styleSelect = document.createElement('select');
@@ -953,15 +1062,15 @@ function buildCitationPanel({ itemKey = null, cslItems = null }) {
   }
   const modeSelect = document.createElement('select');
   modeSelect.className = 'citation-mode';
-  for (const [value, label] of [['bibliography', 'Bibliography'], ['in-text', 'In-text']]) {
+  for (const [value, key] of [['bibliography', 'bibliography'], ['in-text', 'inText']]) {
     const option = document.createElement('option');
     option.value = value;
-    option.textContent = label;
+    option.textContent = tr(key);
     modeSelect.append(option);
   }
   const copyButton = document.createElement('button');
   copyButton.className = 'ghost';
-  copyButton.textContent = 'Copy';
+  copyButton.textContent = tr('copy');
   controls.append(styleSelect, langSelect, modeSelect, copyButton);
   const preview = document.createElement('div');
   preview.className = 'csl-preview';
@@ -997,10 +1106,10 @@ function buildCitationPanel({ itemKey = null, cslItems = null }) {
   }
 
   copyButton.addEventListener('click', async () => {
-    if (!lastPlain) { showToast('Nothing to copy yet.'); return; }
+    if (!lastPlain) { showToast(tr('nothingToCopy')); return; }
     try {
       await navigator.clipboard.writeText(lastPlain);
-      showToast('Citation copied');
+      showToast(tr('citationCopied'));
     } catch {
       const helper = document.createElement('textarea');
       helper.value = lastPlain;
@@ -1008,7 +1117,7 @@ function buildCitationPanel({ itemKey = null, cslItems = null }) {
       helper.select();
       document.execCommand('copy');
       helper.remove();
-      showToast('Citation copied');
+      showToast(tr('citationCopied'));
     }
   });
 

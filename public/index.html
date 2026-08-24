@@ -18,20 +18,20 @@
           <svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#1d6f52"/><path d="M18 18h28v28H18z" fill="#fff"/><path d="M24 24h16v4H24zm0 8h16v4H24zm0 8h10v4H24z" fill="#1d6f52"/></svg>
           <div>
             <h1>Web Zotero</h1>
-            <p>Read, search, and annotate remotely</p>
+            <p data-i18n="tagline">远程阅读、检索与标注</p>
           </div>
         </div>
       </header>
       <div class="controls">
         <div class="search-wrap">
-          <input id="searchInput" type="search" placeholder="Search titles or full text" autocomplete="off">
+          <input id="searchInput" type="search" data-i18n-ph="searchPh" placeholder="搜索标题或全文" autocomplete="off">
           <label class="semantic-toggle" title="Blend LSA semantic ranking with phrase search">
             <input type="checkbox" id="semanticToggle"> 语义
           </label>
         </div>
         <div class="lookup-wrap">
-          <input id="lookupInput" type="text" placeholder="DOI / arXiv / ISBN / BibTeX" autocomplete="off" title="Fetch publication metadata by identifier">
-          <button id="lookupButton" class="ghost">Fetch</button>
+          <input id="lookupInput" type="text" placeholder="DOI / arXiv / ISBN / BibTeX" autocomplete="off" title="按标识符抓取文献元数据">
+          <button id="lookupButton" class="ghost" data-i18n="fetch">获取</button>
         </div>
         <select id="collectionSelect" aria-label="Filter by collection"></select>
         <div class="filter-row">
@@ -44,10 +44,14 @@
           </select>
         </div>
         <div class="button-row">
-          <button id="searchButton" class="ghost">Refresh</button>
-          <button id="reindexButton">Rebuild index</button>
+          <button id="searchButton" class="ghost" data-i18n="refresh">刷新</button>
+          <button id="reindexButton" data-i18n="reindex">重建索引</button>
         </div>
-        <div id="status" class="status">Loading library…</div>
+        <div id="status" class="status" data-i18n="loadingLibrary">正在加载文献库…</div>
+        <div class="pref-row">
+          <button id="themeToggle" class="ghost" title="切换深浅主题">🌓</button>
+          <button id="langToggle" class="ghost" title="Switch language">中/EN</button>
+        </div>
       </div>
       <main id="library" class="library" aria-label="Library"></main>
     </aside>
@@ -55,11 +59,11 @@
       <div class="toolbar">
         <button id="backButton" class="ghost" hidden>←</button>
         <h2 id="detailTitle">Library</h2>
-        <button id="openAnnotatorButton" class="ghost" hidden title="Open in the PDF.js annotator (works on every browser)">✏️ Annotator</button>
-        <button id="newTabButton" class="ghost" hidden title="Open the PDF in a new browser tab">↗ New tab</button>
-        <button id="extractTextButton" class="ghost" hidden>Extract</button>
-        <button id="summarizeButton" class="primary" hidden>AI reading</button>
-        <button id="logoutButton" class="ghost" hidden title="Revoke this session and clear the saved token">Log out</button>
+        <button id="openAnnotatorButton" class="ghost" hidden data-i18n="annotatorBtn" title="在 PDF.js 标注器中打开（所有浏览器可用）">✏️ 标注器</button>
+        <button id="newTabButton" class="ghost" hidden data-i18n="newTab" title="在新标签页打开 PDF">↗ 新标签</button>
+        <button id="extractTextButton" class="ghost" hidden data-i18n="extract">提取全文</button>
+        <button id="summarizeButton" class="primary" hidden data-i18n="aiReading">AI 精读</button>
+        <button id="logoutButton" class="ghost" hidden data-i18n="logout" title="撤销当前会话并清除令牌">退出登录</button>
       </div>
       <div class="workspace">
         <section id="detailView" class="view detail active">
