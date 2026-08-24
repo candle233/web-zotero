@@ -57,7 +57,7 @@ const userStore = new UserStore(DATA_DIR);
 const annotationStore = new WebAnnotationStore(DATA_DIR);
 const semanticIndex = new SemanticIndex(DATA_DIR, searchIndex);
 const eventBus = new EventBus();
-const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore });
+const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore, userStore, annotationStore });
 const offlineLibrary = new OfflineLibrary(DATA_DIR);
 
 const ROLE_RANK = { viewer: 0, editor: 1, owner: 2 };
@@ -793,7 +793,7 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/health') {
-    return sendJson(response, 200, { ...health.status(), semantic: semanticIndex.status(), auth: authMode() });
+    return sendJson(response, 200, { ...health.status({ eventBus }), semantic: semanticIndex.status(), auth: authMode() });
   }
 
   return sendJson(response, 404, { error: 'API route not found' });
@@ -801,6 +801,15 @@ async function handleApi(request, response, url) {
 
 async function handle(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
+  const startedAt = Date.now();
+  response.on('finish', () => {
+    // Compact API request log; static assets stay quiet.
+    if (url.pathname.startsWith('/api/') && url.pathname !== '/api/events') {
+      const line = `${request.method} ${url.pathname} ${response.statusCode} ${Date.now() - startedAt}ms`;
+      if (response.statusCode >= 500) console.error(line);
+      else console.log(line);
+    }
+  });
   try {
     if (url.pathname.startsWith('/api/')) return await handleApi(request, response, url);
     const routes = {
@@ -824,8 +833,10 @@ async function handle(request, response) {
     if (route) return await serveFile(response, ...route);
     return sendJson(response, 404, { error: 'Not found' });
   } catch (error) {
-    if ((error.statusCode || 500) >= 500) console.error(error);
-    if (!response.headersSent) sendJson(response, error.statusCode || 500, { error: error.message || 'Internal server error' });
+    const status = error.statusCode || 500;
+    health.recordError(`${request.method} ${url.pathname}`, error);
+    if (status >= 500) console.error(error);
+    if (!response.headersSent) sendJson(response, status, { error: error.message || 'Internal server error' });
   }
 }
 
