@@ -300,3 +300,18 @@ body {
   padding: 2px 4px;
 }
 .wz-sidebar-delete:hover { opacity: 1; }
+.wz-formula-recent { list-style: none; margin: 4px 0 0; padding: 0; max-height: 140px; overflow-y: auto; }
+.wz-formula-recent li + li { margin-top: 3px; }
+.wz-formula-recent button {
+  width: 100%;
+  text-align: left;
+  background: #10131a;
+  border: 1px solid var(--wz-border);
+  color: #cdd5e1;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  border-radius: 6px;
+  padding: 5px 7px;
+  cursor: pointer;
+}
+.wz-formula-recent button:hover { border-color: #2f9e6e; }

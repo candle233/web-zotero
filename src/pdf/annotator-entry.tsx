@@ -243,6 +243,15 @@ function AnnotatorApp() {
     [annotations, authHeaders],
   );
 
+  const formulaHistory = React.useCallback(
+    async () => {
+      const response = await fetch('/api/formulas?limit=8', { headers: authHeaders });
+      if (!response.ok) return { formulas: [] };
+      return response.json() as Promise<{ formulas: { id: number; latex: string; createdAt?: string }[] }>;
+    },
+    [authHeaders],
+  );
+
   const formulaOcr = React.useCallback(
     async (dataUrl: string): Promise<{ latex: string }> => {
       const response = await fetch('/api/formula-ocr', {
@@ -287,6 +296,7 @@ function AnnotatorApp() {
           void deleteOnServer(id);
         }}
         onFormulaOcr={formulaOcr}
+        formulaHistory={formulaHistory}
       />
       <div className="wz-export-row">
         <span className="wz-sync-status" data-testid="sync-status">{syncStatus}</span>

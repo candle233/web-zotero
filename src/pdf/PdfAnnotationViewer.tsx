@@ -19,6 +19,8 @@ export interface PdfAnnotationViewerProps {
   onDocumentLoaded?: (info: { pages: number }) => void;
   /** 1-based page to scroll to once the document and its pages are mounted. */
   initialPage?: number;
+  /** Loads saved formula recognitions for the reuse list in the OCR panel. */
+  formulaHistory?: () => Promise<{ formulas: { id: number; latex: string; createdAt?: string }[] }>;
   /**
    * Formula OCR (R10): receives a cropped PNG data URL of the region the
    * user dragged in formula mode, resolves to recognized LaTeX. Provided by
@@ -99,6 +101,19 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
   const [areaMode, setAreaMode] = useState(false);
   const [formulaMode, setFormulaMode] = useState(false);
   const [formula, setFormula] = useState<FormulaState | null>(null);
+  const [formulaRecent, setFormulaRecent] = useState<{ id: number; latex: string }[]>([]);
+
+  const refreshFormulaHistory = useCallback(() => {
+    if (!props.formulaHistory) return;
+    props.formulaHistory()
+      .then(payload => setFormulaRecent(payload.formulas.slice(0, 6)))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (formula) refreshFormulaHistory();
+  }, [formula?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const loadingTaskRef = useRef<{ destroy: () => Promise<void> } | null>(null);
   const pageViewports = useRef(new Map<number, ViewportLike>());
@@ -404,6 +419,13 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
       {formula && (
         <FormulaPanel
           state={formula}
+          recent={formulaRecent}
+          onPickRecent={latex => {
+            setFormula({ status: 'done', latex, copied: false });
+            void copyText(latex).then(ok => {
+              setFormula(current => (current ? { ...current, copied: ok } : current));
+            });
+          }}
           onChange={latex => setFormula(current => (current ? { ...current, latex } : current))}
           onCopy={async () => {
             const ok = await copyText(formula.latex || '');
@@ -652,13 +674,15 @@ function FloatingToolbar({ x, y, annotation, onColor, onComment, onDelete, onClo
 
 interface FormulaPanelProps {
   state: FormulaState;
+  recent: { id: number; latex: string }[];
+  onPickRecent: (latex: string) => void;
   onChange: (latex: string) => void;
   onCopy: () => void | Promise<void>;
   onClose: () => void;
 }
 
 /** Result panel for the ∑ LaTeX mode: recognized LaTeX + one-click copy. */
-function FormulaPanel({ state, onChange, onCopy, onClose }: FormulaPanelProps) {
+function FormulaPanel({ state, recent, onPickRecent, onChange, onCopy, onClose }: FormulaPanelProps) {
   return (
     <div className="wz-formula-panel" role="dialog" aria-label="Recognized LaTeX" data-testid="formula-panel">
       <header>
@@ -683,6 +707,24 @@ function FormulaPanel({ state, onChange, onCopy, onClose }: FormulaPanelProps) {
               {state.copied ? '✓ copied' : ''}
             </span>
           </div>
+        </>
+      )}
+      {state.status === 'done' && recent.length > 0 && (
+        <>
+          <p className="wz-formula-status">最近识别</p>
+          <ul className="wz-formula-recent">
+            {recent.map(entry => (
+              <li key={entry.id}>
+                <button
+                  type="button"
+                  title="Reuse this result"
+                  onClick={() => onPickRecent(entry.latex)}
+                >
+                  {entry.latex.length > 46 ? `${entry.latex.slice(0, 46)}…` : entry.latex}
+                </button>
+              </li>
+            ))}
+          </ul>
         </>
       )}
     </div>

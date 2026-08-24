@@ -698,10 +698,19 @@ async function handleApi(request, response, url) {
     const body = await readJson(request);
     try {
       const result = await recognizeFormula(body.image, { timeoutMs: Number(body.timeoutMs) || 30000 });
-      return sendJson(response, 200, result);
+      const saved = webStore.saveFormula(result.latex, typeof body.itemKey === 'string' ? body.itemKey : null);
+      return sendJson(response, 200, { ...result, historyId: saved.id });
     } catch (error) {
       return sendJson(response, error.statusCode || 500, { error: error.message || 'Formula recognition failed.' });
     }
+  }
+
+  if (pathname === '/api/formulas' && request.method === 'GET') {
+    return sendJson(response, 200, { formulas: webStore.listFormulas(url.searchParams.get('limit')) });
+  }
+
+  if (/^\/api\/formulas\/\d+$/.test(pathname) && request.method === 'DELETE') {
+    return sendJson(response, 200, webStore.deleteFormula(Number(pathname.split('/')[3])));
   }
 
   if (pathname === '/api/citations/styles' && request.method === 'GET') {

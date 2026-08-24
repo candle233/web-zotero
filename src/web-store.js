@@ -19,6 +19,12 @@ class WebStore {
         scroll_percent REAL NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS formula_history (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        latex       TEXT NOT NULL,
+        item_key    TEXT,
+        created_at  TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS web_items (
         key           TEXT PRIMARY KEY,
         item_type     TEXT NOT NULL DEFAULT 'journalArticle',
@@ -118,6 +124,26 @@ class WebStore {
       creators: JSON.parse(row.creators_json),
       fields: JSON.parse(row.fields_json)
     };
+  }
+
+  saveFormula(latex, itemKey = null) {
+    const now = new Date().toISOString();
+    const result = this.database.prepare(
+      'INSERT INTO formula_history(latex, item_key, created_at) VALUES (?, ?, ?)'
+    ).run(String(latex).slice(0, 10000), itemKey ? String(itemKey) : null, now);
+    return { id: Number(result.lastInsertRowid), latex: String(latex), itemKey, createdAt: now };
+  }
+
+  listFormulas(limit = 30) {
+    return this.database.prepare(`
+      SELECT id, latex, item_key AS itemKey, created_at AS createdAt
+      FROM formula_history ORDER BY id DESC LIMIT ?
+    `).all(Math.min(100, Math.max(1, Number(limit) || 30)));
+  }
+
+  deleteFormula(id) {
+    const result = this.database.prepare('DELETE FROM formula_history WHERE id = ?').run(Number(id));
+    return { ok: true, deleted: Number(result.changes) > 0 };
   }
 
   deleteImported(key) {

@@ -67,6 +67,11 @@ async function recognizeFormula(dataUrl, { url = DEFAULT_OCR_URL, timeoutMs = 30
     throw httpError(503, `Formula OCR engine ${reason}. ${SETUP_HINT}`);
   }
   if (!response.ok) {
+    // The engine answers 500 when its detector finds nothing usable (e.g. a
+    // blank or text-only region) — surface actionable guidance instead.
+    if (response.status >= 500) {
+      throw httpError(422, 'No formula was recognized in the selected region. Try a tighter selection around the formula itself.');
+    }
     const detail = await response.text().catch(() => '');
     throw httpError(502, `OCR engine HTTP ${response.status}.${detail.slice(0, 200) ? ` ${detail.slice(0, 200)}` : ''}`);
   }
