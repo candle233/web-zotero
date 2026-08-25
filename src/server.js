@@ -31,6 +31,7 @@ const { PgWorkspaceStore } = require('./workspaces-pg');
 const { S3Storage } = require('./s3-storage');
 const { sanitizeNoteHtml, noteHtmlToPlainText } = require('./notes-html');
 const { SemanticIndex } = require('./semantic');
+const { PgSemanticIndex } = require('./semantic-pg');
 const { ask } = require('./ask');
 const { EventBus } = require('./events');
 
@@ -72,7 +73,13 @@ const workspaceStore = process.env.DATABASE_URL
   ? new PgWorkspaceStore(process.env.DATABASE_URL)
   : null;
 const s3Storage = new S3Storage();
-const semanticIndex = new SemanticIndex(DATA_DIR, searchIndex);
+const semanticIndex = process.env.DATABASE_URL
+  ? new PgSemanticIndex(process.env.DATABASE_URL, {
+      apiKey: OPENAI_API_KEY,
+      baseUrl: AI_BASE_URL,
+      model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small'
+    })
+  : new SemanticIndex(DATA_DIR, searchIndex);
 const eventBus = new EventBus();
 const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore, userStore, annotationStore });
 const offlineLibrary = new OfflineLibrary(DATA_DIR);
@@ -84,10 +91,10 @@ const READ_ONLY_POST_ROUTES = new Set([
   '/api/formula-ocr'
 ]);
 
-/** Blends FTS bm25 ranking with LSA cosine ranking (both normalized to [0,1]). */
-function hybridSearch(query, limit) {
+/** Blends FTS bm25 ranking with semantic cosine ranking (both normalized to [0,1]). */
+async function hybridSearch(query, limit) {
   const lexical = searchIndex.search(query, limit);
-  const semantic = semanticIndex.ready ? semanticIndex.search(query, limit) : [];
+  const semantic = semanticIndex.ready ? await semanticIndex.search(query, limit) : [];
   if (!semantic.length) return lexical.map(result => ({ ...result, mode: 'lexical' }));
   if (!lexical.length) return semantic.map(result => ({ ...result, mode: 'semantic' }));
   const lexScores = lexical.map(result => -result.score);
@@ -114,11 +121,11 @@ function hybridSearch(query, limit) {
     .map(({ blended, ...result }) => ({ ...result, score: Number(blended.toFixed(4)) }));
 }
 
-/** Lexical (title-term overlap) + LSA related-paper merge. */
-function hybridRelated(itemKey, limit) {
+/** Lexical (title-term overlap) + semantic related-paper merge. */
+async function hybridRelated(itemKey, limit) {
   const lexical = recommend(zoteroDatabase.items, itemKey, limit);
   if (!semanticIndex.ready) return lexical.map(entry => ({ ...entry, mode: 'lexical' }));
-  const semantic = semanticIndex.related(itemKey, limit * 2);
+  const semantic = await semanticIndex.related(itemKey, limit * 2);
   const semanticScores = semantic.map(entry => entry.score);
   const merged = new Map();
   for (const entry of lexical) {
@@ -568,7 +575,7 @@ async function handleApi(request, response, url) {
   if (/^\/api\/items\/[^/]+\/related$/.test(pathname) && request.method === 'GET') {
     await zoteroDatabase.refreshItems();
     const key = decodeURIComponent(pathname.split('/')[3]);
-    return sendJson(response, 200, { related: hybridRelated(key, 10) });
+    return sendJson(response, 200, { related: await hybridRelated(key, 10) });
   }
 
   // Backlinks: which notes contain a "[[<this item's title>]]" wiki link.
@@ -695,14 +702,14 @@ async function handleApi(request, response, url) {
       : (semanticIndex.ready ? 'hybrid' : 'lexical');
     let results;
     if (mode === 'lexical') results = searchIndex.search(query, limit).map(result => ({ ...result, mode }));
-    else if (mode === 'semantic') results = semanticIndex.ready ? semanticIndex.search(query, limit).map(result => ({ ...result, mode })) : [];
-    else results = hybridSearch(query, limit);
+    else if (mode === 'semantic') results = semanticIndex.ready ? (await semanticIndex.search(query, limit)).map(result => ({ ...result, mode })) : [];
+    else results = await hybridSearch(query, limit);
     return sendJson(response, 200, {
       query,
       mode,
       results,
       index: searchIndex.status(),
-      semantic: semanticIndex.status()
+      semantic: await semanticIndex.status()
     });
   }
 
@@ -1093,7 +1100,7 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/health') {
-    return sendJson(response, 200, { ...await health.status({ eventBus }), semantic: semanticIndex.status(), auth: await authMode() });
+    return sendJson(response, 200, { ...await health.status({ eventBus }), semantic: await semanticIndex.status(), auth: await authMode() });
   }
 
   return sendJson(response, 404, { error: 'API route not found' });
@@ -1163,16 +1170,23 @@ async function main() {
     console.log(`Library items: ${zoteroDatabase.items.length}; indexed documents: ${searchIndex.status().indexed}`);
     console.log(`Auth mode: ${mode.mode}${mode.mode === 'users' ? ` (${mode.users} users)` : ''}`);
   });
-  setImmediate(() => searchIndex.reindex({ limit: 100000 }).then(result => {
-    if (result.started) console.log(`Initial index complete: ${result.indexed} indexed, ${result.skipped} skipped`);
-    return semanticIndex.rebuildAsync();
-  }).then(semantic => {
-    if (semantic.ready) {
-      console.log(`Semantic index ready: ${semantic.chunks} chunks, ${semantic.items} items, ${semantic.terms} terms, dim ${semantic.dimensions}`);
-    } else if (semantic.reason) {
-      console.log(`Semantic index skipped: ${semantic.reason}`);
+  setImmediate(async () => {
+    try {
+      if (semanticIndex.init) await semanticIndex.init();
+      const result = await searchIndex.reindex({ limit: 100000 });
+      if (result.started) console.log(`Initial index complete: ${result.indexed} indexed, ${result.skipped} skipped`);
+      if (semanticIndex.rebuildAsync) {
+        const semantic = await semanticIndex.rebuildAsync();
+        if (semantic.ready) {
+          console.log(`Semantic index ready: ${semantic.chunks} chunks, ${semantic.items} items, ${semantic.terms} terms, dim ${semantic.dimensions}`);
+        } else if (semantic.reason) {
+          console.log(`Semantic index skipped: ${semantic.reason}`);
+        }
+      }
+    } catch (error) {
+      console.error(error.message);
     }
-  }).catch(error => console.error(error.message)));
+  });
   const shutdown = () => {
     eventBus.closeAll();
     // Force-exit after 5s: lingering keep-alive connections would otherwise
@@ -1188,7 +1202,7 @@ async function main() {
       if (annotationStore.close) await annotationStore.close();
       else annotationStore.database?.close?.();
       if (workspaceStore?.close) await workspaceStore.close();
-      semanticIndex.close();
+      if (semanticIndex.close) await semanticIndex.close();
       zoteroDatabase.close();
       process.exit(0);
     });

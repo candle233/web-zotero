@@ -36,13 +36,13 @@ function scoreChunk(chunk, questionTokens, queryVector, dimensions) {
   return 0.55 * Math.max(0, semantic) + 0.45 * lexical;
 }
 
-function retrieve({ question, itemKey, semanticIndex }) {
+async function retrieve({ question, itemKey, semanticIndex }) {
   const questionTokens = [...new Set(tokenize(question))];
   if (!questionTokens.length) throw Object.assign(new Error('The question contains no searchable terms.'), { statusCode: 400 });
-  const queryVector = semanticIndex.ready ? semanticIndex.projectQuery(question) : null;
-  const dimensions = semanticIndex.k;
+  const queryVector = semanticIndex.ready && semanticIndex.projectQuery ? semanticIndex.projectQuery(question) : null;
+  const dimensions = semanticIndex.k || semanticIndex.dimensions || 0;
   const candidates = semanticIndex.ready
-    ? (itemKey ? semanticIndex.chunksFor(itemKey) : semanticIndex.chunkVectors)
+    ? (itemKey ? await semanticIndex.chunksFor(itemKey) : (semanticIndex.chunkVectors || []))
     : [];
   let ranked = candidates
     .map(chunk => ({
@@ -113,7 +113,7 @@ async function ask({ question, itemKey = null, semanticIndex, apiKey = '', model
   const cleanQuestion = String(question || '').trim();
   if (!cleanQuestion) throw Object.assign(new Error('Field "question" is required.'), { statusCode: 400 });
 
-  const { questionTokens, ranked } = retrieve({ question: cleanQuestion, itemKey, semanticIndex });
+  const { questionTokens, ranked } = await retrieve({ question: cleanQuestion, itemKey, semanticIndex });
   const passages = ranked.map(entry => ({
     itemKey: entry.chunk.itemKey,
     attachmentKey: entry.chunk.attachmentKey,
