@@ -12,6 +12,7 @@ const { URL } = require('node:url');
 const { ZoteroDatabase } = require('./zotero-db');
 const { SearchIndex } = require('./search');
 const { WebStore } = require('./web-store');
+const { PgWebStore } = require('./web-store-pg');
 const { localSummary, openAiSummary } = require('./local-ai');
 const { installedDesktopPlugins } = require('./plugins');
 const { exportCsv, exportFormats, exportJson, exportRis } = require('./citation');
@@ -25,6 +26,7 @@ const { formatCitations, listStyles } = require('./citation-service');
 const { UserStore, hashToken } = require('./users');
 const { PgUserStore } = require('./users-pg');
 const { WebAnnotationStore } = require('./annotations-store');
+const { PgWebAnnotationStore } = require('./annotations-store-pg');
 const { sanitizeNoteHtml, noteHtmlToPlainText } = require('./notes-html');
 const { SemanticIndex } = require('./semantic');
 const { ask } = require('./ask');
@@ -55,11 +57,15 @@ const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.openai.com/v1';
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const zoteroDatabase = new ZoteroDatabase();
 const searchIndex = new SearchIndex(DATA_DIR, zoteroDatabase);
-const webStore = new WebStore(DATA_DIR);
+const webStore = process.env.DATABASE_URL
+  ? new PgWebStore(process.env.DATABASE_URL)
+  : new WebStore(DATA_DIR);
 const userStore = process.env.DATABASE_URL
   ? new PgUserStore(process.env.DATABASE_URL)
   : new UserStore(DATA_DIR);
-const annotationStore = new WebAnnotationStore(DATA_DIR);
+const annotationStore = process.env.DATABASE_URL
+  ? new PgWebAnnotationStore(process.env.DATABASE_URL)
+  : new WebAnnotationStore(DATA_DIR);
 const semanticIndex = new SemanticIndex(DATA_DIR, searchIndex);
 const eventBus = new EventBus();
 const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore, userStore, annotationStore });
@@ -359,8 +365,8 @@ function sortItems(items, sort) {
 }
 
 /** Shapes a web-imported record like an itemDetail for detail/export views. */
-function importedDetail(key) {
-  const imported = webStore.getImported(key);
+async function importedDetail(key) {
+  const imported = await webStore.getImported(key);
   if (!imported) return null;
   return {
     id: null,
@@ -401,7 +407,7 @@ async function handleApi(request, response, url) {
   if (pathname === '/api/items' && request.method === 'GET') {
     const items = await zoteroDatabase.refreshItems();
     // Web-imported entries join the library (they have no PDFs/collections).
-    const combined = items.concat(webStore.listImported());
+    const combined = items.concat(await webStore.listImported());
     const query = (url.searchParams.get('q') || '').toLowerCase().trim();
     const collectionId = Number(url.searchParams.get('collection'));
     const tagName = (url.searchParams.get('tag') || '').trim();
@@ -448,14 +454,14 @@ async function handleApi(request, response, url) {
       creators: item.creators || [],
       fields: item.fields || {}
     }));
-    webStore.saveImported(records);
+    await webStore.saveImported(records);
     return sendJson(response, 201, { imported: records.length, keys: records.map(record => record.key), source: resolved.source });
   }
 
   // Imported (web-layer) items may be removed; Zotero rows stay read-only.
   if (/^\/api\/items\/[^/]+$/.test(pathname) && request.method === 'DELETE') {
     const key = decodeURIComponent(pathname.split('/')[3]);
-    const result = webStore.deleteImported(key);
+    const result = await webStore.deleteImported(key);
     return result.deleted
       ? sendJson(response, 200, result)
       : sendJson(response, 403, { error: 'Zotero library items are read-only; only imported entries can be deleted.' });
@@ -463,13 +469,13 @@ async function handleApi(request, response, url) {
 
   if (pathname.startsWith('/api/items/') && pathname.endsWith('/detail') && request.method === 'GET') {
     const key = decodeURIComponent(pathname.split('/')[3]);
-    const detail = zoteroDatabase.itemDetail(key) || importedDetail(key);
+    const detail = zoteroDatabase.itemDetail(key) || await importedDetail(key);
     return detail ? sendJson(response, 200, detail) : sendJson(response, 404, { error: 'Item not found' });
   }
 
   if (/^\/api\/items\/[^/]+\/export\.(json|csv|bib|txt|ris)$/.test(pathname) && request.method === 'GET') {
     const match = pathname.match(/^\/api\/items\/([^/]+)\/export\.(json|csv|bib|txt|ris)$/);
-    const detail = zoteroDatabase.itemDetail(decodeURIComponent(match[1])) || importedDetail(decodeURIComponent(match[1]));
+    const detail = zoteroDatabase.itemDetail(decodeURIComponent(match[1])) || await importedDetail(decodeURIComponent(match[1]));
     if (!detail) return sendJson(response, 404, { error: 'Item not found' });
     let body;
     let type;
@@ -500,18 +506,18 @@ async function handleApi(request, response, url) {
 
   if (/^\/api\/items\/[^/]+\/notes$/.test(pathname)) {
     const itemKey = decodeURIComponent(pathname.split('/')[3]);
-    if (request.method === 'GET') return sendJson(response, 200, webStore.getNote(itemKey));
+    if (request.method === 'GET') return sendJson(response, 200, await webStore.getNote(itemKey));
     if (request.method === 'DELETE') {
-      return sendJson(response, 200, webStore.deleteNote(itemKey));
+      return sendJson(response, 200, await webStore.deleteNote(itemKey));
     }
     const body = await readJson(request);
     const expectedVersion = body.version == null ? null : Number(body.version);
     try {
       if (typeof body.html === 'string') {
         const html = sanitizeNoteHtml(body.html.slice(0, 210000));
-        return sendJson(response, 200, webStore.saveNote(itemKey, noteHtmlToPlainText(html), html, expectedVersion));
+        return sendJson(response, 200, await webStore.saveNote(itemKey, noteHtmlToPlainText(html), html, expectedVersion));
       }
-      return sendJson(response, 200, webStore.saveNote(itemKey, String(body.content || '').slice(0, 200000), null, expectedVersion));
+      return sendJson(response, 200, await webStore.saveNote(itemKey, String(body.content || '').slice(0, 200000), null, expectedVersion));
     } catch (error) {
       if (error.statusCode === 409 && error.currentNote) {
         return sendJson(response, 409, {
@@ -526,7 +532,7 @@ async function handleApi(request, response, url) {
 
   if (/^\/api\/items\/[^/]+\/note-versions$/.test(pathname) && request.method === 'GET') {
     const itemKey = decodeURIComponent(pathname.split('/')[3]);
-    return sendJson(response, 200, { versions: webStore.listNoteVersions(itemKey) });
+    return sendJson(response, 200, { versions: await webStore.listNoteVersions(itemKey) });
   }
 
   if (/^\/api\/items\/[^/]+\/desktop-notes$/.test(pathname) && request.method === 'GET') {
@@ -564,7 +570,7 @@ async function handleApi(request, response, url) {
     const key = decodeURIComponent(pathname.split('/')[3]);
     const item = zoteroDatabase.getItemByKey(key);
     if (!item) return sendJson(response, 404, { error: 'Item not found' });
-    const mentions = webStore.mentions(item.title).map(entry => {
+    const mentions = (await webStore.mentions(item.title)).map(entry => {
       const source = zoteroDatabase.getItemByKey(entry.itemKey);
       return {
         itemKey: entry.itemKey,
@@ -620,17 +626,17 @@ async function handleApi(request, response, url) {
 
   if (/^\/api\/items\/[^/]+\/progress$/.test(pathname)) {
     const itemKey = decodeURIComponent(pathname.split('/')[3]);
-    if (request.method === 'GET') return sendJson(response, 200, webStore.getProgress(itemKey));
+    if (request.method === 'GET') return sendJson(response, 200, await webStore.getProgress(itemKey));
     const body = await readJson(request);
-    return sendJson(response, 200, webStore.saveProgress(itemKey, body.percent));
+    return sendJson(response, 200, await webStore.saveProgress(itemKey, body.percent));
   }
 
   if (pathname === '/api/stats/reading' && request.method === 'GET') {
-    const stats = webStore.readingStats(url.searchParams.get('limit'));
+    const stats = await webStore.readingStats(url.searchParams.get('limit'));
     // Attach titles for display.
     for (const entry of stats.recent) {
       const item = zoteroDatabase.getItemByKey(entry.itemKey);
-      entry.title = item ? item.title : (webStore.getImported(entry.itemKey)?.title ?? entry.itemKey);
+      entry.title = item ? item.title : ((await webStore.getImported(entry.itemKey))?.title ?? entry.itemKey);
     }
     return sendJson(response, 200, stats);
   }
@@ -692,7 +698,7 @@ async function handleApi(request, response, url) {
     if (!attachment) return sendJson(response, 409, { error: 'This item has no available PDF.' });
     const refresh = url.searchParams.get('refresh') === '1';
     if (!refresh) {
-      const cached = webStore.getCachedSummary(detail.key);
+      const cached = await webStore.getCachedSummary(detail.key);
       if (cached) return sendJson(response, 200, { ...cached, cached: true });
     }
     let extracted;
@@ -709,17 +715,17 @@ async function handleApi(request, response, url) {
     try {
       if (!OPENAI_API_KEY) {
         const local = localSummary(input);
-        webStore.cacheSummary(detail.key, 'local', local);
+        await webStore.cacheSummary(detail.key, 'local', local);
         return sendJson(response, 200, local);
       }
       const summary = await openAiSummary({ ...input, apiKey: OPENAI_API_KEY, model: process.env.OPENAI_MODEL, baseUrl: AI_BASE_URL });
-      webStore.cacheSummary(detail.key, summary.provider || 'openai', summary);
+      await webStore.cacheSummary(detail.key, summary.provider || 'openai', summary);
       return sendJson(response, 200, summary);
     } catch (error) {
       if (!OPENAI_API_KEY) return sendJson(response, 500, { error: error.message });
       try {
         const fallback = { ...localSummary(input), warning: `OpenAI failed; local analysis used instead: ${error.message}` };
-        webStore.cacheSummary(detail.key, 'local', fallback);
+        await webStore.cacheSummary(detail.key, 'local', fallback);
         return sendJson(response, 200, fallback);
       } catch (fallbackError) {
         return sendJson(response, 503, { error: fallbackError.message });
@@ -744,7 +750,7 @@ async function handleApi(request, response, url) {
     const body = await readJson(request);
     try {
       const result = await recognizeFormula(body.image, { timeoutMs: Number(body.timeoutMs) || 30000 });
-      const saved = webStore.saveFormula(result.latex, typeof body.itemKey === 'string' ? body.itemKey : null);
+      const saved = await webStore.saveFormula(result.latex, typeof body.itemKey === 'string' ? body.itemKey : null);
       return sendJson(response, 200, { ...result, historyId: saved.id });
     } catch (error) {
       return sendJson(response, error.statusCode || 500, { error: error.message || 'Formula recognition failed.' });
@@ -752,11 +758,11 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/formulas' && request.method === 'GET') {
-    return sendJson(response, 200, { formulas: webStore.listFormulas(url.searchParams.get('limit')) });
+    return sendJson(response, 200, { formulas: await webStore.listFormulas(url.searchParams.get('limit')) });
   }
 
   if (/^\/api\/formulas\/\d+$/.test(pathname) && request.method === 'DELETE') {
-    return sendJson(response, 200, webStore.deleteFormula(Number(pathname.split('/')[3])));
+    return sendJson(response, 200, await webStore.deleteFormula(Number(pathname.split('/')[3])));
   }
 
   if (pathname === '/api/citations/styles' && request.method === 'GET') {
@@ -906,7 +912,7 @@ async function handleApi(request, response, url) {
     const itemKey = url.searchParams.get('itemKey');
     if (!itemKey) return sendJson(response, 400, { error: 'Query parameter "itemKey" is required.' });
     return sendJson(response, 200, {
-      annotations: annotationStore.list({ itemKey, attachmentKey: url.searchParams.get('attachmentKey') || undefined })
+      annotations: await annotationStore.list({ itemKey, attachmentKey: url.searchParams.get('attachmentKey') || undefined })
     });
   }
 
@@ -915,7 +921,7 @@ async function handleApi(request, response, url) {
     if (!zoteroDatabase.itemDetail(String(body.itemKey || ''))) {
       return sendJson(response, 404, { error: 'Item not found' });
     }
-    const annotation = annotationStore.create({
+    const annotation = await annotationStore.create({
       itemKey: body.itemKey,
       attachmentKey: body.attachmentKey,
       authorId: effective.user ? effective.user.id : null,
@@ -936,13 +942,13 @@ async function handleApi(request, response, url) {
     const actor = effective.user ? { id: effective.user.id, role: effective.user.role } : null;
     if (request.method === 'PATCH') {
       const body = await readJson(request);
-      const annotation = annotationStore.update(annotationId, body, actor);
+      const annotation = await annotationStore.update(annotationId, body, actor);
       eventBus.publish('annotation', { action: 'updated', by: effective.user ? effective.user.email : null, annotation });
       return sendJson(response, 200, { annotation });
     }
     if (request.method === 'DELETE') {
-      const target = annotationStore.get(annotationId);
-      const result = annotationStore.remove(annotationId, actor);
+      const target = await annotationStore.get(annotationId);
+      const result = await annotationStore.remove(annotationId, actor);
       eventBus.publish('annotation', {
         action: 'deleted',
         by: effective.user ? effective.user.email : null,
@@ -1078,11 +1084,13 @@ async function main() {
     const forceExit = setTimeout(() => process.exit(0), 5000);
     forceExit.unref();
     server.closeAllConnections?.();
-    server.close(() => {
-      searchIndex.database.close();
-      webStore.database.close();
-      userStore.close();
-      annotationStore.close();
+    server.close(async () => {
+      searchIndex.database?.close?.();
+      if (webStore.close) await webStore.close();
+      else webStore.database?.close?.();
+      if (userStore.close) await userStore.close();
+      if (annotationStore.close) await annotationStore.close();
+      else annotationStore.database?.close?.();
       semanticIndex.close();
       zoteroDatabase.close();
       process.exit(0);

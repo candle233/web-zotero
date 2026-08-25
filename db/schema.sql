@@ -368,3 +368,23 @@ CREATE TABLE IF NOT EXISTS ai_summaries (
   payload_json JSONB NOT NULL,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Runtime annotations (R7a): keyed by Zotero string keys rather than the team
+-- library's numeric attachments/items FKs — the desktop library is read-only,
+-- so these reference keys instead of rows.
+CREATE TABLE IF NOT EXISTS web_annotations (
+  id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  item_key       TEXT NOT NULL,
+  attachment_key TEXT NOT NULL,
+  author_id      BIGINT REFERENCES users (id) ON DELETE SET NULL,
+  page_index     INT    NOT NULL CHECK (page_index >= 0),
+  page_label     TEXT,
+  type           TEXT   NOT NULL DEFAULT 'highlight',
+  rects_json     JSONB  NOT NULL CHECK (jsonb_typeof(rects_json) = 'array'),
+  color          CHAR(7) NOT NULL DEFAULT '#ffd400',
+  comment_text   TEXT   NOT NULL DEFAULT '',
+  quote_text     TEXT   NOT NULL DEFAULT '',
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS web_annotations_item_idx ON web_annotations (item_key, attachment_key, page_index);

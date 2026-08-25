@@ -275,6 +275,10 @@ class WebStore {
         || String(row.content_html || '').includes(needle))
       .map(row => ({ itemKey: row.item_key, updatedAt: row.updated_at }));
   }
+
+  close() {
+    this.database.close();
+  }
 }
 
 module.exports = { WebStore };
