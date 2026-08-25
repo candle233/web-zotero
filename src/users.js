@@ -15,13 +15,23 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
+const util = require('node:util');
+const scryptAsync = util.promisify(crypto.scrypt);
+
 const ROLES = ['owner', 'editor', 'viewer'];
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };
 const DEFAULT_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_SESSIONS_PER_USER = 10;
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16);
   const hash = crypto.scryptSync(String(password), salt, SCRYPT.keylen, SCRYPT);
+  return `scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$${salt.toString('hex')}$${hash.toString('hex')}`;
+}
+
+async function hashPasswordAsync(password) {
+  const salt = crypto.randomBytes(16);
+  const hash = await scryptAsync(String(password), salt, SCRYPT.keylen, SCRYPT);
   return `scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$${salt.toString('hex')}$${hash.toString('hex')}`;
 }
 
@@ -32,6 +42,21 @@ function verifyPassword(password, stored) {
   try {
     const expected = Buffer.from(hashHex, 'hex');
     const actual = crypto.scryptSync(String(password), Buffer.from(saltHex, 'hex'), expected.length, {
+      N: Number(n), r: Number(r), p: Number(p)
+    });
+    return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+  } catch {
+    return false;
+  }
+}
+
+async function verifyPasswordAsync(password, stored) {
+  const parts = String(stored || '').split('$');
+  if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
+  const [, n, r, p, saltHex, hashHex] = parts;
+  try {
+    const expected = Buffer.from(hashHex, 'hex');
+    const actual = await scryptAsync(String(password), Buffer.from(saltHex, 'hex'), expected.length, {
       N: Number(n), r: Number(r), p: Number(p)
     });
     return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
@@ -175,6 +200,15 @@ class UserStore {
   issueToken(user, { ttlMs = DEFAULT_TOKEN_TTL_MS } = {}) {
     const token = crypto.randomBytes(32).toString('hex');
     const now = Date.now();
+    // Enforce session limit per user before inserting
+    const existingSessions = this.database.prepare(`
+      SELECT token_hash FROM sessions WHERE user_id = ? ORDER BY created_at DESC
+    `).all(user.id);
+    if (existingSessions.length >= MAX_SESSIONS_PER_USER) {
+      const stale = existingSessions.slice(MAX_SESSIONS_PER_USER - 1);
+      const del = this.database.prepare('DELETE FROM sessions WHERE token_hash = ?');
+      for (const s of stale) del.run(s.token_hash);
+    }
     this.database.prepare(`
       INSERT INTO sessions (token_hash, user_id, created_at, last_seen_at, expires_at)
       VALUES (?, ?, ?, ?, ?)
@@ -266,4 +300,13 @@ class UserStore {
   }
 }
 
-module.exports = { UserStore, ROLES, hashPassword, verifyPassword, hashToken };
+module.exports = {
+  UserStore,
+  ROLES,
+  MAX_SESSIONS_PER_USER,
+  hashPassword,
+  hashPasswordAsync,
+  verifyPassword,
+  verifyPasswordAsync,
+  hashToken
+};

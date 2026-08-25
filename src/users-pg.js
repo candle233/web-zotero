@@ -9,7 +9,15 @@
 
 const crypto = require('node:crypto');
 const { Pool } = require('pg');
-const { SCRYPT, hashPassword, verifyPassword, hashToken } = require('./users');
+const {
+  SCRYPT,
+  MAX_SESSIONS_PER_USER,
+  hashPassword,
+  hashPasswordAsync,
+  verifyPassword,
+  verifyPasswordAsync,
+  hashToken
+} = require('./users');
 
 const ROLES = ['owner', 'editor', 'viewer'];
 const DEFAULT_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -56,10 +64,11 @@ class PgUserStore {
     if (!ROLES.includes(role)) throw httpError(400, `Role must be one of: ${ROLES.join(', ')}.`);
     if ((await this.count()) === 0) role = 'owner'; // first account bootstraps the owner
     try {
+      const pwHash = await hashPasswordAsync(password);
       const { rows } = await this.pool.query(`
         INSERT INTO users (email, display_name, password_hash, role)
         VALUES ($1, $2, $3, $4) RETURNING id
-      `, [normalizedEmail, String(displayName || '').slice(0, 200), hashPassword(password), role]);
+      `, [normalizedEmail, String(displayName || '').slice(0, 200), pwHash, role]);
       return await this.userById(Number(rows[0].id));
     } catch (error) {
       if (String(error.message).includes('users_email_lower_key')) throw httpError(409, 'A user with this email already exists.');
@@ -81,7 +90,7 @@ class PgUserStore {
       throw httpError(400, 'Password must be at least 8 characters.');
     }
     const hash = password !== undefined
-      ? hashPassword(password)
+      ? await hashPasswordAsync(password)
       : (await this.pool.query('SELECT password_hash FROM users WHERE id = $1', [Number(id)])).rows[0].password_hash;
     await this.pool.query(`
       UPDATE users SET
@@ -111,12 +120,23 @@ class PgUserStore {
       WHERE lower(email) = $1 AND deleted_at IS NULL
     `, [String(email || '').trim().toLowerCase()]);
     const user = rows[0];
-    if (!user || !verifyPassword(password, user.password_hash)) throw httpError(401, 'Invalid email or password.');
+    if (!user || !(await verifyPasswordAsync(password, user.password_hash))) throw httpError(401, 'Invalid email or password.');
     return { id: Number(user.id), email: user.email, displayName: user.display_name, role: user.role };
   }
 
   async issueToken(user, { ttlMs = DEFAULT_TOKEN_TTL_MS } = {}) {
     const token = crypto.randomBytes(32).toString('hex');
+    const { rows: currentSessions } = await this.pool.query(
+      'SELECT token_hash FROM sessions WHERE user_id = $1 ORDER BY created_at DESC',
+      [user.id]
+    );
+    if (currentSessions.length >= MAX_SESSIONS_PER_USER) {
+      const staleHashes = currentSessions.slice(MAX_SESSIONS_PER_USER - 1).map(r => r.token_hash);
+      await this.pool.query(
+        'DELETE FROM sessions WHERE token_hash = ANY($1::text[])',
+        [staleHashes]
+      );
+    }
     await this.pool.query(`
       INSERT INTO sessions (token_hash, user_id, expires_at)
       VALUES ($1, $2, now() + make_interval(secs => $3))
@@ -167,10 +187,11 @@ class PgUserStore {
     if (typeof newPassword !== 'string' || newPassword.length < 8) {
       throw httpError(400, 'New password must be at least 8 characters.');
     }
-    if (!verifyPassword(currentPassword, rows[0].password_hash)) {
+    if (!(await verifyPasswordAsync(currentPassword, rows[0].password_hash))) {
       throw httpError(403, 'Current password is incorrect.');
     }
-    await this.pool.query('UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1', [Number(id), hashPassword(newPassword)]);
+    const newHash = await hashPasswordAsync(newPassword);
+    await this.pool.query('UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1', [Number(id), newHash]);
     return { ok: true };
   }
 

@@ -507,6 +507,85 @@ async function handleApi(request, response, url) {
     return response.end(body);
   }
 
+  // Batch notes export (Markdown digest / JSON compilation)
+  if ((pathname === '/api/export/notes.md' || pathname === '/api/export/notes.json') && request.method === 'GET') {
+    const allNotes = await webStore.listAllNotes();
+    const format = pathname.endsWith('.json') ? 'json' : 'md';
+    const collectionId = Number(url.searchParams.get('collection'));
+    const tagName = (url.searchParams.get('tag') || '').trim();
+
+    const items = await zoteroDatabase.refreshItems();
+    const imported = await webStore.listImported();
+    const allItems = items.concat(imported);
+    const itemMap = new Map(allItems.map(item => [item.key, item]));
+
+    let filteredNotes = allNotes;
+    if (collectionId > 0) {
+      const collItemIds = zoteroDatabase.collectionItemIds(collectionId);
+      filteredNotes = filteredNotes.filter(n => {
+        const it = itemMap.get(n.itemKey);
+        return it && !it.imported && collItemIds && collItemIds.has(it.id);
+      });
+    }
+    if (tagName) {
+      const tagItemIds = zoteroDatabase.tagItemIds(tagName);
+      filteredNotes = filteredNotes.filter(n => {
+        const it = itemMap.get(n.itemKey);
+        return it && !it.imported && tagItemIds && tagItemIds.has(it.id);
+      });
+    }
+
+    if (format === 'json') {
+      const payload = {
+        exportedAt: new Date().toISOString(),
+        count: filteredNotes.length,
+        notes: filteredNotes.map(n => {
+          const item = itemMap.get(n.itemKey);
+          return {
+            itemKey: n.itemKey,
+            title: item?.title || n.itemKey,
+            authors: item?.creators || [],
+            version: n.version,
+            updatedAt: n.updatedAt,
+            content: n.content,
+            html: n.html
+          };
+        })
+      };
+      const jsonStr = JSON.stringify(payload, null, 2);
+      response.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': Buffer.byteLength(jsonStr),
+        'content-disposition': 'attachment; filename="web-zotero-notes.json"',
+        'x-content-type-options': 'nosniff',
+        'cache-control': 'no-store'
+      });
+      return response.end(jsonStr);
+    }
+
+    let md = `# Web Zotero Notes Export\n\n- **Export Date**: ${new Date().toISOString()}\n- **Total Notes**: ${filteredNotes.length}\n\n---\n\n`;
+    for (const n of filteredNotes) {
+      const item = itemMap.get(n.itemKey);
+      const title = item?.title || n.itemKey;
+      const authors = (item?.creators || []).join(', ');
+      md += `## ${title}\n\n`;
+      if (authors) md += `- **Authors**: ${authors}\n`;
+      md += `- **Item Key**: \`${n.itemKey}\`\n`;
+      md += `- **Last Updated**: ${n.updatedAt}\n\n`;
+      md += `${n.content || ''}\n\n---\n\n`;
+    }
+
+    const mdBuffer = Buffer.from(md, 'utf8');
+    response.writeHead(200, {
+      'content-type': 'text/markdown; charset=utf-8',
+      'content-length': mdBuffer.length,
+      'content-disposition': 'attachment; filename="web-zotero-notes.md"',
+      'x-content-type-options': 'nosniff',
+      'cache-control': 'no-store'
+    });
+    return response.end(mdBuffer);
+  }
+
   if (/^\/api\/items\/[^/]+\/files\/[^/]+$/.test(pathname) && request.method === 'GET') {
     const [, , , itemKey, , attachmentKey] = pathname.split('/');
     return servePdf(request, response, decodeURIComponent(itemKey), decodeURIComponent(attachmentKey));

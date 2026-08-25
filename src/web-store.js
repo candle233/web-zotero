@@ -70,6 +70,19 @@ class WebStore {
     ).get(itemKey) || { itemKey, content: '', html: null, updatedAt: null, version: 0 };
   }
 
+  listAllNotes() {
+    return this.database.prepare(`
+      SELECT item_key AS itemKey, content, content_html AS html, updated_at AS updatedAt, version
+      FROM web_notes ORDER BY datetime(updated_at) DESC
+    `).all().map(r => ({
+      itemKey: r.itemKey,
+      content: r.content,
+      html: r.html,
+      updatedAt: r.updatedAt,
+      version: Number(r.version)
+    }));
+  }
+
   /**
    * Saves a note with optimistic concurrency (R9b): when expectedVersion is
    * given and differs from the stored one, throws 409 carrying the server's

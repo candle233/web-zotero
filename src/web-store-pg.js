@@ -47,6 +47,19 @@ class PgWebStore {
     };
   }
 
+  async listAllNotes() {
+    const { rows } = await this.query(
+      'SELECT item_key AS "itemKey", content, content_html AS html, updated_at AS "updatedAt", version FROM web_notes ORDER BY updated_at DESC'
+    );
+    return rows.map(row => ({
+      itemKey: row.itemKey,
+      content: row.content || '',
+      html: row.html ?? null,
+      updatedAt: new Date(row.updatedAt).toISOString(),
+      version: Number(row.version)
+    }));
+  }
+
   async saveNote(itemKey, content, html = null, expectedVersion = null) {
     const client = await this.pool.connect();
     try {
