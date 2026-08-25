@@ -71,3 +71,31 @@ test('WebStore imported items: save, list, get, delete round-trip', () => {
   assert.equal(store.deleteImported('WEBTEST0001').deleted, false);
   store.database.close();
 });
+
+test('note versioning: conflict detection and history trail', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'web-zotero-notever-'));
+  const store = new WebStore(dir);
+  const first = store.saveNote('K1', 'draft one', '<p>draft one</p>');
+  assert.equal(first.version, 1);
+  // Stale writer (version 1 vs current 2) is rejected with the server copy.
+  store.saveNote('K1', 'draft two', null); // now at v2
+  let conflict = null;
+  try {
+    store.saveNote('K1', 'stale edit', null, 1);
+  } catch (error) {
+    conflict = error;
+  }
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.currentNote.version, 2);
+  assert.equal(conflict.currentNote.content, 'draft two');
+  // Correct expected version passes and archives the replaced one.
+  const third = store.saveNote('K1', 'merged edit', null, 2);
+  assert.equal(third.version, 3);
+  const versions = store.listNoteVersions('K1');
+  assert.equal(versions.length, 2);
+  assert.deepEqual(versions.map(entry => entry.version), [2, 1]);
+  // No expectedVersion = last-write-wins (back-compat for old clients).
+  store.saveNote('K1', 'force write');
+  assert.equal(store.getNote('K1').version, 4);
+  store.database.close();
+});

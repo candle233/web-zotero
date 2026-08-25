@@ -501,11 +501,28 @@ async function handleApi(request, response, url) {
       return sendJson(response, 200, webStore.deleteNote(itemKey));
     }
     const body = await readJson(request);
-    if (typeof body.html === 'string') {
-      const html = sanitizeNoteHtml(body.html.slice(0, 210000));
-      return sendJson(response, 200, webStore.saveNote(itemKey, noteHtmlToPlainText(html), html));
+    const expectedVersion = body.version == null ? null : Number(body.version);
+    try {
+      if (typeof body.html === 'string') {
+        const html = sanitizeNoteHtml(body.html.slice(0, 210000));
+        return sendJson(response, 200, webStore.saveNote(itemKey, noteHtmlToPlainText(html), html, expectedVersion));
+      }
+      return sendJson(response, 200, webStore.saveNote(itemKey, String(body.content || '').slice(0, 200000), null, expectedVersion));
+    } catch (error) {
+      if (error.statusCode === 409 && error.currentNote) {
+        return sendJson(response, 409, {
+          error: 'This note was updated by someone else while you were editing.',
+          conflict: true,
+          current: error.currentNote
+        });
+      }
+      throw error;
     }
-    return sendJson(response, 200, webStore.saveNote(itemKey, String(body.content || '').slice(0, 200000)));
+  }
+
+  if (/^\/api\/items\/[^/]+\/note-versions$/.test(pathname) && request.method === 'GET') {
+    const itemKey = decodeURIComponent(pathname.split('/')[3]);
+    return sendJson(response, 200, { versions: webStore.listNoteVersions(itemKey) });
   }
 
   if (/^\/api\/items\/[^/]+\/desktop-notes$/.test(pathname) && request.method === 'GET') {

@@ -16,6 +16,7 @@ interface NotePayload {
   content: string;
   html: string | null;
   updatedAt: string | null;
+  version?: number;
 }
 
 function legacyTextToHtml(text: string): string {
@@ -121,6 +122,10 @@ function NotesApp() {
   const token = localStorage.getItem('web-zotero-token') || '';
   const [status, setStatus] = React.useState('Loading…');
   const [saving, setSaving] = React.useState(false);
+  const [noteVersion, setNoteVersion] = React.useState<number | null>(null);
+  const [conflict, setConflict] = React.useState<{ serverHtml: string; serverText: string } | null>(null);
+  const [versionsOpen, setVersionsOpen] = React.useState(false);
+  const [versions, setVersions] = React.useState<{ id: number; version: number; createdAt: string }[]>([]);
   const [wordCount, setWordCount] = React.useState(0);
   const [linkPickerOpen, setLinkPickerOpen] = React.useState(false);
 
@@ -141,24 +146,33 @@ function NotesApp() {
     [token],
   );
 
-  const saveNote = React.useCallback(async () => {
+  const saveNote = React.useCallback(async ({ force = false } = {}) => {
     if (!editor || saving) return;
     setSaving(true);
     try {
       const response = await fetch(`/api/items/${encodeURIComponent(itemKey)}/notes`, {
         method: 'POST',
         headers: authHeaders,
-        body: JSON.stringify({ html: editor.getHTML() }),
+        body: JSON.stringify({ html: editor.getHTML(), version: force ? null : noteVersion }),
       });
       const payload = await response.json().catch(() => ({}));
+      if (response.status === 409 && payload.conflict && payload.current) {
+        // Keep the local edits in the editor; show what the server holds.
+        setConflict({ serverHtml: payload.current.html || '', serverText: payload.current.content || '' });
+        setNoteVersion(payload.current.version ?? null);
+        setStatus('Conflict: someone saved a newer version. Compare below, then overwrite or load theirs.');
+        return;
+      }
       if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
-      setStatus(`Saved ${new Date(payload.updatedAt || Date.now()).toLocaleString()}`);
+      setConflict(null);
+      setNoteVersion(payload.version ?? null);
+      setStatus(`Saved v${payload.version ?? '?'} · ${new Date(payload.updatedAt || Date.now()).toLocaleTimeString()}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Save failed');
     } finally {
       setSaving(false);
     }
-  }, [editor, itemKey, authHeaders, saving]);
+  }, [editor, itemKey, authHeaders, saving, noteVersion]);
 
   React.useEffect(() => {
     if (!editor || !itemKey) return;
@@ -171,7 +185,9 @@ function NotesApp() {
         if (cancelled) return;
         editor.commands.setContent(note.html || legacyTextToHtml(note.content || ''), { emitUpdate: true });
         setWordCount(editor.getText().trim().split(/\s+/).filter(Boolean).length);
-        setStatus(note.updatedAt ? `Saved ${new Date(note.updatedAt).toLocaleString()}` : 'New note');
+        setNoteVersion(note.version ?? null);
+        setConflict(null);
+        setStatus(note.updatedAt ? `Saved v${note.version ?? '?'} · ${new Date(note.updatedAt).toLocaleString()}` : 'New note');
       } catch {
         if (!cancelled) setStatus('Could not load this note.');
       }
@@ -206,6 +222,22 @@ function NotesApp() {
           {saving ? 'Saving…' : 'Save (Ctrl+S)'}
         </button>
       </header>
+      {conflict && (
+        <div className="notes-conflict" data-testid="notes-conflict">
+          <p>⚠️ 服务器上有更新的版本（他人已保存）。你的修改仍在编辑器里。</p>
+          <button type="button" onClick={() => void saveNote({ force: true })}>
+            用我的版本覆盖
+          </button>
+          <button type="button" onClick={() => {
+            if (!editor) return;
+            editor.commands.setContent(conflict.serverHtml || '', { emitUpdate: true });
+            setConflict(null);
+            setStatus('Loaded the server version into the editor.');
+          }}>
+            加载服务器版本（丢弃我的修改）
+          </button>
+        </div>
+      )}
       {linkPickerOpen && editor && (
         <LinkPicker
           onClose={() => setLinkPickerOpen(false)}
@@ -252,7 +284,53 @@ function NotesApp() {
       <main className="notes-body">
         <EditorContent editor={editor} />
       </main>
-      <footer className="notes-footer">{wordCount} words · rich text autosanitized on save</footer>
+      <footer className="notes-footer">
+        {wordCount} words · rich text autosanitized on save
+        <button
+          type="button"
+          className="notes-versions-toggle"
+          onClick={async () => {
+            const next = !versionsOpen;
+            setVersionsOpen(next);
+            if (next) {
+              try {
+                const response = await fetch(`/api/items/${encodeURIComponent(itemKey)}/note-versions`, { headers: authHeaders });
+                const payload = await response.json().catch(() => ({ versions: [] }));
+                setVersions((payload.versions || []) as { id: number; version: number; createdAt: string }[]);
+              } catch {
+                setVersions([]);
+              }
+            }
+          }}
+        >
+          🕘 历史版本
+        </button>
+      </footer>
+      {versionsOpen && (
+        <div className="notes-versions" data-testid="notes-versions">
+          {versions.length === 0 && <p className="notes-status">还没有历史版本——每次保存都会自动留档。</p>}
+          {versions.map(entry => (
+            <div key={entry.id} className="notes-version-row">
+              <span>v{entry.version} · {new Date(entry.createdAt).toLocaleString()}</span>
+              <button
+                type="button"
+                onClick={async () => {
+                  const detailResponse = await fetch(
+                    `/api/items/${encodeURIComponent(itemKey)}/note-versions`,
+                    { headers: authHeaders },
+                  ).then(r => r.json()).catch(() => ({ versions: [] }));
+                  const match = (detailResponse.versions || []).find((v: { id: number }) => v.id === entry.id);
+                  if (!editor || !match) return;
+                  editor.commands.setContent(match.html || legacyTextToHtml(match.content || ''), { emitUpdate: true });
+                  setStatus(`Restored v${entry.version} into the editor — save to keep it.`);
+                }}
+              >
+                恢复到编辑器
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

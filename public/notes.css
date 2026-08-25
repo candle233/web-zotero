@@ -143,3 +143,19 @@ body {
   .notes-body { padding: 14px; }
   .ntb { min-width: 38px; height: 38px; }
 }
+
+.notes-conflict {
+  margin: 10px 16px;
+  padding: 10px 14px;
+  border: 1px solid #e0a34a;
+  border-radius: 10px;
+  background: rgba(224, 163, 74, 0.12);
+}
+.notes-conflict p { margin: 0 0 8px; font-size: 13px; }
+.notes-conflict button { margin-right: 8px; padding: 5px 10px; cursor: pointer; }
+.notes-versions-toggle { margin-left: auto; background: none; border: none; color: inherit; opacity: 0.7; cursor: pointer; font: inherit; font-size: 12px; }
+.notes-versions-toggle:hover { opacity: 1; }
+.notes-versions { max-height: 200px; overflow-y: auto; padding: 6px 16px; border-top: 1px solid rgba(128, 128, 128, 0.25); }
+.notes-version-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 4px 0; font-size: 12px; }
+.notes-version-row button { background: none; border: 1px solid currentColor; border-radius: 6px; padding: 3px 8px; cursor: pointer; color: inherit; opacity: 0.8; }
+.notes-version-row button:hover { opacity: 1; }

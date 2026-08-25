@@ -1143,6 +1143,24 @@ function buildCitationPanel({ itemKey = null, cslItems = null }) {
 }
 
 // ---------------------------------------------------------------------------
+// Mobile gesture: swipe down on a full-screen overlay closes it.
+// ---------------------------------------------------------------------------
+for (const overlay of [elements.searchResults, document.getElementById('lookupView')]) {
+  if (!overlay) continue;
+  let startY = null;
+  overlay.addEventListener('touchstart', event => { startY = event.touches[0].clientY; }, { passive: true });
+  overlay.addEventListener('touchend', event => {
+    if (startY == null) return;
+    const delta = event.changedTouches[0].clientY - startY;
+    startY = null;
+    if (delta > 90) {
+      if (overlay === elements.searchResults) elements.closeSearch.click();
+      else elements.closeLookup.click();
+    }
+  }, { passive: true });
+}
+
+// ---------------------------------------------------------------------------
 // Keyboard shortcuts: "/" focuses search, Esc backs out of overlays,
 // ArrowUp/ArrowDown walk the library list.
 // ---------------------------------------------------------------------------

@@ -19,6 +19,15 @@ class WebStore {
         scroll_percent REAL NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS note_versions (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_key     TEXT NOT NULL,
+        content      TEXT NOT NULL DEFAULT '',
+        content_html TEXT,
+        version      INTEGER NOT NULL,
+        created_at   TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS note_versions_item_idx ON note_versions (item_key, id);
       CREATE TABLE IF NOT EXISTS ai_summaries (
         item_key     TEXT PRIMARY KEY,
         provider     TEXT NOT NULL,
@@ -46,22 +55,62 @@ class WebStore {
     } catch {
       // Column already exists.
     }
+    // Optimistic concurrency for note editing (R9b): monotonically increasing
+    // per-note version; writers send the version they based their edit on.
+    try {
+      this.database.exec('ALTER TABLE web_notes ADD COLUMN version INTEGER NOT NULL DEFAULT 1');
+    } catch {
+      // Column already exists.
+    }
   }
 
   getNote(itemKey) {
     return this.database.prepare(
-      'SELECT item_key AS itemKey, content, content_html AS html, updated_at AS updatedAt FROM web_notes WHERE item_key = ?'
-    ).get(itemKey) || { itemKey, content: '', html: null, updatedAt: null };
+      'SELECT item_key AS itemKey, content, content_html AS html, updated_at AS updatedAt, version FROM web_notes WHERE item_key = ?'
+    ).get(itemKey) || { itemKey, content: '', html: null, updatedAt: null, version: 0 };
   }
 
-  saveNote(itemKey, content, html = null) {
+  /**
+   * Saves a note with optimistic concurrency (R9b): when expectedVersion is
+   * given and differs from the stored one, throws 409 carrying the server's
+   * current note so the caller can merge. Every accepted save archives the
+   * replaced version (last 20 kept per item).
+   */
+  saveNote(itemKey, content, html = null, expectedVersion = null) {
+    const httpError = status => Object.assign(new Error('version conflict'), { statusCode: status });
+    const existing = this.getNote(itemKey);
+    if (expectedVersion != null && existing.updatedAt && Number(expectedVersion) !== existing.version) {
+      throw Object.assign(httpError(409), { currentNote: existing });
+    }
+    const previousVersion = existing.version || 0;
     const updatedAt = new Date().toISOString();
+    const nextVersion = previousVersion + 1;
+    if (existing.updatedAt) {
+      this.database.prepare(`
+        INSERT INTO note_versions(item_key, content, content_html, version, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(String(itemKey), existing.content || '', existing.html ?? null, previousVersion, existing.updatedAt);
+      this.database.prepare(`
+        DELETE FROM note_versions WHERE item_key = ? AND id NOT IN (
+          SELECT id FROM note_versions WHERE item_key = ? ORDER BY id DESC LIMIT 20
+        )
+      `).run(String(itemKey), String(itemKey));
+    }
     this.database.prepare(`
-      INSERT INTO web_notes(item_key, content, content_html, updated_at) VALUES (?, ?, ?, ?)
+      INSERT INTO web_notes(item_key, content, content_html, updated_at, version) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(item_key) DO UPDATE SET
-        content = excluded.content, content_html = excluded.content_html, updated_at = excluded.updated_at
-    `).run(itemKey, String(content || ''), html, updatedAt);
-    return { itemKey, content: String(content || ''), html, updatedAt };
+        content = excluded.content, content_html = excluded.content_html,
+        updated_at = excluded.updated_at, version = excluded.version
+    `).run(itemKey, String(content || ''), html, updatedAt, nextVersion);
+    return { itemKey, content: String(content || ''), html, updatedAt, version: nextVersion };
+  }
+
+  listNoteVersions(itemKey, limit = 20) {
+    return this.database.prepare(`
+      SELECT id, version, content, content_html AS html, created_at AS createdAt
+      FROM note_versions WHERE item_key = ? ORDER BY version DESC LIMIT ?
+    `).all(String(itemKey), Math.min(50, Math.max(1, Number(limit) || 20)))
+      .map(row => ({ ...row, html: row.html ?? null }));
   }
 
   deleteNote(itemKey) {
