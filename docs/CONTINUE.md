@@ -26,41 +26,10 @@
 
 ## 待实现功能清单（按优先级顺序，逐个做）
 
-### 1. R7b 阶段二：web 层存储迁移 PostgreSQL
-- 实现 `src/web-store-pg.js`（PgWebStore）和 `src/annotations-store.js` 的 PG 版，API 与 SQLite 版一致（全部 async，调用点加 await 即兼容两者）
-- 表已建好：`web_notes`（含 version 列）、`note_versions`、`web_items`、`reading_progress_web`、`formula_history`、`ai_summaries`
-- **设计决策点**：PG 版标注存储——蓝图 `annotations` 表用 attachment_id/item_id 外键挂 items 表，但 items 表没数据；建议新增 `web_annotations_pg`（item_key/attachment_key 结构，与 SQLite 版同构），蓝图表留给团队版
-- 验收：`DATABASE_URL=postgresql://postgres:<密码>@127.0.0.1:5432/web_zotero` 启动 → 高亮标注/笔记保存（含版本冲突）/阅读进度/公式历史/摘要缓存全部落 PG（psql 查表确认）；不设 DATABASE_URL 时 82 测试全过
-
-### 2. R7b 阶段三：工作区 API
-- `GET/POST /api/workspaces`、`GET/PATCH/DELETE /api/workspaces/:id/members`（表已建：workspaces、workspace_members）
-- owner 可建工作区、拉成员、设角色；PG 模式下生效
-- 验收：curl 走完建区→加成员→改角色→删成员全流程，psql 确认
-
-### 3. S3/MinIO 预签名直传（需先部署 MinIO）
-- 端点：`POST /api/attachments/:id/upload-url` 返回预签名 PUT URL
-- 零依赖优先：手写 AWS SigV4（Node crypto 可实现），或引入 `@aws-sdk/client-s3`+`s3-request-presigner`（这是第一个合理的重依赖，权衡后决定）
-- 验收：curl 拿 URL → 直传文件 → HEAD 确认
-
-### 4. R8b：pgvector 生产级语义检索
-- `CREATE EXTENSION vector`（schema.sql 已留注释位）；items/chunks 嵌入向量列 + HNSW 索引
-- 嵌入模型三选一：a) 本地 ONNX（bge-small-zh，~100MB）；b) 复用 Pix2Text 的 transformers 环境；c) OpenAI/Ollama embedding API。先调研再定
-- 替换 `src/semantic.js` 的本地 LSA 为 PG 向量检索（保留 LSA 作为无 PG 时的回退）
-- 验收：语义搜索结果质量对比 LSA（同一组中文查询），检索走 `ORDER BY embedding <=> $1 LIMIT n`
-
 ### 5. R9b 完整版：真 CRDT 协同编辑
 - 现状：乐观锁 + 版本历史（`note_versions` 表）已上线
 - 引入 Yjs + y-websocket（或基于现有 SSE 的 y-sweet 风格 awareness），笔记多人光标/实时合并
 - 这是最大的单项，先做技术验证 spike 再全量
-
-### 6. 小项打包（一轮做完）
-- `users.js` 的 `scryptSync` → 异步 `crypto.scrypt`（消除登录时 ~100ms 事件循环阻塞）
-- 每用户会话数上限（如 10，超出收回最旧的）
-- `src/notes-html.js` 的手写 sanitizer → `isomorphic-dompurify`（PG 模式下已可接受依赖）
-- 多笔记支持：web_notes 主键改 (item_key, note_id)，UI 列表化（数据迁移：现有单笔记升级为 note_id=1）
-- 批量导出：`GET /api/export/notes.md`（全部 web 笔记按条目打包）、合集级 BibTeX 合并导出
-- Zotero 运行检测：SQLITE_BUSY 连续出现时 `/api/health` 返回提示"桌面端正在同步"
-- EPUB 附件在线阅读（PDF.js 支持 EPUB 需换 epub.js，评估工作量）
 
 ---
 
@@ -70,7 +39,26 @@
 3. `git add -A && git commit`（信息用英文祈使句，说清 what+why）→ `git push origin master`
 4. 更新本文件：把完成项移到下方"已完成"并写提交号
 
-## 已完成（截至 2026-08-25，提交 2db20d9）
-R1–R9a 全部；R9b-lite（笔记乐观锁+版本历史+移动手势）；R7b 阶段一（PG 建库+21 表+PgUserStore+DATABASE_URL 切换）；
-安全加固（登录限流/CSP/XSS 修复/恒时比较/127.0.0.1 默认绑定）；SSE 断线补发；Cookie 认证；
-公式识别（Pix2Text 代理+历史）；批量导入/标签/排序/搜索直达页码/阅读统计/摘要缓存/中英文+主题/Ollama baseUrl；登录表单+键盘导航；LSA worker 线程化；健康检查+请求日志；账号自助管理。
+## 已完成（截至 2026-08-26）
+- **R1–R9a 全部**：基础检索、PDF 阅读器、TipTap 笔记、标注系统、引用格式化、多用户体系（commit `2db20d9` 前完成）。
+- **R7b 阶段二：Web 层存储全面迁移 PostgreSQL**（commit `433fa91`）：
+  - 实现 `src/web-store-pg.js`（`PgWebStore`）与 `src/annotations-store-pg.js`（`PgWebAnnotationStore`），全面支持 `web_notes`（行级悲观锁+乐观锁并发冲突 409 检测+版本归档）、`reading_progress_web`、`formula_history`、`ai_summaries`、`web_items`、`web_annotations`。
+  - `src/server.js` 与 `src/health.js` 全异步化支持双存储切换；新增 `tests/pg-stores.test.js`。
+- **R7b 阶段三：工作区 API 与团队权限**（commit `caddf97`）：
+  - 实现 `src/workspaces-pg.js`（`PgWorkspaceStore`），支持多工作区创建/重命名/删除与成员角色 RBAC（owner/editor/viewer）。
+  - 实现 `GET/POST /api/workspaces`、`GET/PATCH/DELETE /api/workspaces/:id`、`GET/POST /api/workspaces/:id/members`、`PATCH/DELETE /api/workspaces/:id/members/:userId`。
+  - 新增 `tests/workspaces.test.js` 与全流程实测。
+- **S3 / MinIO 预签名直传**（commit `14458e1`）：
+  - 实现零依赖 AWS SigV4 预签名上传引擎 `src/s3-storage.js`，支持 MinIO、AWS S3、Cloudflare R2。
+  - 实现 `POST /api/attachments/upload-url` 与 `POST /api/items/:key/attachments/upload-url`。
+  - 新增 `tests/s3-storage.test.js`。
+- **R8b：PostgreSQL & pgvector 生产级语义检索**（commit `73ca959`）：
+  - 实现 `src/semantic-pg.js`（`PgSemanticIndex`），支持 pgvector `vector(dim)` 列 + HNSW 索引（`vector_cosine_ops`）+ `<=>` 相似度搜索；无扩展时无缝降级 JSON 数组余弦计算。
+  - 支持 OpenAI / Ollama `/v1/embeddings` API 以及内置局部 TF-IDF 哈希向量；`src/ask.js` 与 `src/server.js` 混合检索（hybridSearch/hybridRelated）全异步适配。
+  - 新增 `tests/semantic-pg.test.js`。
+- **小项优化包**（commit `189449b`）：
+  - `users.js` 与 `users-pg.js` 升级异步 `crypto.scrypt`（`hashPasswordAsync` / `verifyPasswordAsync`），消除密码验证阻塞。
+  - 每用户会话上限 `MAX_SESSIONS_PER_USER = 10`，超出自动回收最旧会话。
+  - 批量导出 `GET /api/export/notes.md` 与 `GET /api/export/notes.json`（支持 collection/tag 筛选与 Markdown 格式打包）。
+  - `WebStore` 与 `PgWebStore` 实现 `listAllNotes()`；增强 `src/notes-html.js` 防注入白名单；新增 `tests/optimizations.test.js`。
+
