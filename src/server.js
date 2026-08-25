@@ -28,6 +28,7 @@ const { PgUserStore } = require('./users-pg');
 const { WebAnnotationStore } = require('./annotations-store');
 const { PgWebAnnotationStore } = require('./annotations-store-pg');
 const { PgWorkspaceStore } = require('./workspaces-pg');
+const { S3Storage } = require('./s3-storage');
 const { sanitizeNoteHtml, noteHtmlToPlainText } = require('./notes-html');
 const { SemanticIndex } = require('./semantic');
 const { ask } = require('./ask');
@@ -70,6 +71,7 @@ const annotationStore = process.env.DATABASE_URL
 const workspaceStore = process.env.DATABASE_URL
   ? new PgWorkspaceStore(process.env.DATABASE_URL)
   : null;
+const s3Storage = new S3Storage();
 const semanticIndex = new SemanticIndex(DATA_DIR, searchIndex);
 const eventBus = new EventBus();
 const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore, userStore, annotationStore });
@@ -626,6 +628,31 @@ async function handleApi(request, response, url) {
 
   if (/^\/api\/items\/[^/]+\/offline$/.test(pathname) && request.method === 'DELETE') {
     return sendJson(response, 200, await offlineLibrary.remove(decodeURIComponent(pathname.split('/')[3])));
+  }
+
+  // S3 / MinIO / R2 attachment direct presigned upload URL (R7b Phase 3 / R8)
+  if ((pathname === '/api/attachments/upload-url' || /^\/api\/items\/[^/]+\/attachments\/upload-url$/.test(pathname)) && request.method === 'POST') {
+    if (ROLE_RANK[effective.role] < ROLE_RANK.editor) {
+      return sendJson(response, 403, { error: `Your role (${effective.role}) is read-only.` });
+    }
+    const body = await readJson(request);
+    const itemKey = pathname.startsWith('/api/items/') ? decodeURIComponent(pathname.split('/')[3]) : (body.itemKey || 'global');
+    const attachmentKey = body.attachmentKey || null;
+    const filename = body.filename || 'attachment.pdf';
+    const contentType = body.contentType || 'application/pdf';
+    const expiresIn = Number(body.expiresIn) || 900;
+
+    const fileKey = s3Storage.generateFileKey(itemKey, attachmentKey, filename);
+    try {
+      const presigned = s3Storage.generatePresignedUploadUrl({
+        fileKey,
+        contentType,
+        expiresIn
+      });
+      return sendJson(response, 200, presigned);
+    } catch (error) {
+      return sendJson(response, error.statusCode || 500, { error: error.message });
+    }
   }
 
   if (/^\/api\/items\/[^/]+\/progress$/.test(pathname)) {
