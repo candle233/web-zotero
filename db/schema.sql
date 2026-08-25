@@ -21,19 +21,29 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;    -- trigram fuzzy title search
 -- ----------------------------------------------------------------------------
 -- Enumerated types (CHECK-backed enums keep bulk inserts cheap and portable)
 -- ----------------------------------------------------------------------------
-CREATE TYPE item_type AS ENUM (
+DO $$ BEGIN
+  CREATE TYPE item_type AS ENUM (
   'journalArticle', 'book', 'bookSection', 'conferencePaper', 'preprint',
   'report', 'thesis', 'webpage', 'document', 'dataset', 'presentation',
   'manuscript', 'other'
 );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE TYPE creator_role AS ENUM ('author', 'editor', 'translator', 'contributor');
+DO $$ BEGIN
+  CREATE TYPE creator_role AS ENUM ('author', 'editor', 'translator', 'contributor');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE TYPE attachment_role AS ENUM ('primary', 'supplementary', 'snapshot');
+DO $$ BEGIN
+  CREATE TYPE attachment_role AS ENUM ('primary', 'supplementary', 'snapshot');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE TYPE annotation_type AS ENUM ('highlight', 'rect', 'note', 'ink', 'strike');
+DO $$ BEGIN
+  CREATE TYPE annotation_type AS ENUM ('highlight', 'rect', 'note', 'ink', 'strike');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
-CREATE TYPE workspace_member_role AS ENUM ('owner', 'editor', 'viewer');
+DO $$ BEGIN
+  CREATE TYPE workspace_member_role AS ENUM ('owner', 'editor', 'viewer');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- ----------------------------------------------------------------------------
 -- Users & Workspaces
@@ -295,3 +305,66 @@ CREATE TRIGGER notes_touch      BEFORE UPDATE ON notes      FOR EACH ROW EXECUTE
 -- SELECT a.* FROM annotations a
 -- WHERE a.search_tsv @@ websearch_to_tsquery('simple', $1)
 -- ORDER BY ts_rank(a.search_tsv, websearch_to_tsquery('simple', $1)) DESC LIMIT 50;
+
+-- ============================================================================
+-- R7b additions: sessions + web-layer stores used by the Node server
+-- ============================================================================
+-- R7b phase 1: server-level role mirrors the SQLite build's owner/editor/viewer
+-- model (workspace-scoped team roles arrive with full workspace wiring).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role workspace_member_role NOT NULL DEFAULT 'editor';
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash   CHAR(64) PRIMARY KEY,
+  user_id      BIGINT      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at   TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions (user_id);
+
+CREATE TABLE IF NOT EXISTS web_items (
+  key           TEXT PRIMARY KEY,
+  item_type     TEXT    NOT NULL DEFAULT 'journalArticle',
+  title         TEXT    NOT NULL,
+  creators_json JSONB   NOT NULL DEFAULT '[]'::jsonb,
+  fields_json   JSONB   NOT NULL DEFAULT '{}'::jsonb,
+  imported_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS web_notes (
+  item_key     TEXT PRIMARY KEY,
+  content      TEXT NOT NULL DEFAULT '',
+  content_html TEXT,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  version      INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS note_versions (
+  id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  item_key     TEXT NOT NULL,
+  content      TEXT NOT NULL DEFAULT '',
+  content_html TEXT,
+  version      INTEGER NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS note_versions_item_idx ON note_versions (item_key, id DESC);
+
+CREATE TABLE IF NOT EXISTS reading_progress_web (
+  item_key       TEXT PRIMARY KEY,
+  scroll_percent REAL NOT NULL DEFAULT 0 CHECK (scroll_percent >= 0 AND scroll_percent <= 100),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS formula_history (
+  id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  latex      TEXT NOT NULL,
+  item_key   TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ai_summaries (
+  item_key     TEXT PRIMARY KEY,
+  provider     TEXT NOT NULL,
+  payload_json JSONB NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);

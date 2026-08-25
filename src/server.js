@@ -23,6 +23,7 @@ const { resolveIdentifier } = require('./metadata');
 const { recognizeFormula } = require('./formula-ocr');
 const { formatCitations, listStyles } = require('./citation-service');
 const { UserStore, hashToken } = require('./users');
+const { PgUserStore } = require('./users-pg');
 const { WebAnnotationStore } = require('./annotations-store');
 const { sanitizeNoteHtml, noteHtmlToPlainText } = require('./notes-html');
 const { SemanticIndex } = require('./semantic');
@@ -55,7 +56,9 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const zoteroDatabase = new ZoteroDatabase();
 const searchIndex = new SearchIndex(DATA_DIR, zoteroDatabase);
 const webStore = new WebStore(DATA_DIR);
-const userStore = new UserStore(DATA_DIR);
+const userStore = process.env.DATABASE_URL
+  ? new PgUserStore(process.env.DATABASE_URL)
+  : new UserStore(DATA_DIR);
 const annotationStore = new WebAnnotationStore(DATA_DIR);
 const semanticIndex = new SemanticIndex(DATA_DIR, searchIndex);
 const eventBus = new EventBus();
@@ -129,8 +132,9 @@ function hybridRelated(itemKey, limit) {
     .map(({ blended, ...entry }) => ({ ...entry, score: Number(blended.toFixed(4)) }));
 }
 
-function authMode() {
-  const users = userStore.count();
+
+async function authMode() {
+  const users = await userStore.count();
   return { mode: users > 0 ? 'users' : (WEB_PASSWORD ? 'legacy' : 'open'), users };
 }
 
@@ -174,7 +178,7 @@ function clearLoginFailures(ip) {
  *   legacy – single shared WEB_PASSWORD (owner role);
  *   open   – no credentials configured, trusted network only.
  */
-function resolvePrincipal(request, url) {
+async function resolvePrincipal(request, url) {
   const authorization = request.headers.authorization || '';
   // Token sources, in order: Authorization: Bearer, ?token= (legacy clients),
   // then the wz_token cookie set at login — so PDF iframes and EventSource
@@ -183,9 +187,9 @@ function resolvePrincipal(request, url) {
   const queryToken = url.searchParams.get('token');
   const token = authorization.startsWith('Bearer ') ? authorization.slice(7)
     : (queryToken || (cookieToken ? decodeURIComponent(cookieToken) : ''));
-  const mode = authMode();
+  const mode = await authMode();
   if (token) {
-    const user = userStore.resolveToken(token);
+    const user = await userStore.resolveToken(token);
     if (user) return { kind: 'user', user, role: user.role, token };
     if (WEB_PASSWORD && secretsMatch(token, WEB_PASSWORD)) return { kind: 'legacy', user: null, role: 'owner', token };
     if (mode.mode === 'open') return { kind: 'open', user: null, role: 'owner' };
@@ -384,9 +388,9 @@ async function handleApi(request, response, url) {
     return sendJson(response, 405, { error: 'Method not allowed' });
   }
 
-  const principal = resolvePrincipal(request, url);
+  const principal = await resolvePrincipal(request, url);
   if (!principal && pathname !== '/api/auth') {
-    return sendJson(response, 401, { error: 'Unauthorized', auth: true, mode: authMode().mode });
+    return sendJson(response, 401, { error: 'Unauthorized', auth: true, mode: await authMode().mode });
   }
   const effective = principal || { kind: 'anonymous', user: null, role: 'viewer' };
   if (request.method !== 'GET' && !READ_ONLY_POST_ROUTES.has(pathname)
@@ -806,12 +810,12 @@ async function handleApi(request, response, url) {
       return sendJson(response, 429, { error: 'Too many failed login attempts. Try again in a few minutes.', auth: true });
     }
     const body = await readJson(request);
-    const mode = authMode();
+    const mode = await authMode();
     if (typeof body.email === 'string' && body.email.trim()) {
       try {
-        const user = userStore.authenticate(body.email, body.password);
+        const user = await userStore.authenticate(body.email, body.password);
         clearLoginFailures(ip);
-        const token = userStore.issueToken(user);
+        const token = await userStore.issueToken(user);
         issueAuthCookie(response, token);
         return sendJson(response, 200, { token, user });
       } catch (error) {
@@ -834,13 +838,13 @@ async function handleApi(request, response, url) {
   // Revokes the caller's session token (user mode); no-op for legacy/open.
   if (pathname === '/api/auth/logout' && request.method === 'POST') {
     clearAuthCookie(response);
-    if (principal?.kind === 'user' && principal.token) userStore.revokeToken(principal.token);
+    if (principal?.kind === 'user' && principal.token) await userStore.revokeToken(principal.token);
     return sendJson(response, 200, { ok: true });
   }
 
   if (pathname === '/api/me' && request.method === 'GET') {
     return sendJson(response, 200, {
-      mode: authMode().mode,
+      mode: await authMode().mode,
       user: effective.user
         ? { email: effective.user.email, displayName: effective.user.displayName, role: effective.user.role }
         : null
@@ -852,10 +856,10 @@ async function handleApi(request, response, url) {
     if (!effective.user) return sendJson(response, 400, { error: 'Password changes require a user account (not legacy/open mode).' });
     const body = await readJson(request);
     try {
-      const result = userStore.changePassword(effective.user.id, body.currentPassword, body.newPassword);
+      const result = await userStore.changePassword(effective.user.id, body.currentPassword, body.newPassword);
       // Other sessions of this user are stale after a rotation.
-      userStore.revokeUserSessions(effective.user.id);
-      const fresh = userStore.issueToken(effective.user);
+      await userStore.revokeUserSessions(effective.user.id);
+      const fresh = await userStore.issueToken(effective.user);
       return sendJson(response, 200, { ...result, token: fresh });
     } catch (error) {
       return sendJson(response, error.statusCode || 500, { error: error.message });
@@ -865,13 +869,13 @@ async function handleApi(request, response, url) {
   if (pathname === '/api/me/sessions' && request.method === 'GET') {
     if (!effective.user) return sendJson(response, 400, { error: 'Session management requires a user account.' });
     const currentHash = principal?.token ? hashToken(principal.token) : null;
-    return sendJson(response, 200, { sessions: userStore.listSessions(effective.user.id, currentHash) });
+    return sendJson(response, 200, { sessions: await userStore.listSessions(effective.user.id, currentHash) });
   }
 
   if (/^\/api\/me\/sessions\/[^/]+$/.test(pathname) && request.method === 'DELETE') {
     if (!effective.user) return sendJson(response, 400, { error: 'Session management requires a user account.' });
     try {
-      return sendJson(response, 200, userStore.revokeSession(effective.user.id, decodeURIComponent(pathname.split('/')[4])));
+      return sendJson(response, 200, await userStore.revokeSession(effective.user.id, decodeURIComponent(pathname.split('/')[4])));
     } catch (error) {
       return sendJson(response, error.statusCode || 500, { error: error.message });
     }
@@ -879,13 +883,13 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/api/users' && request.method === 'GET') {
     if (ROLE_RANK[effective.role] < ROLE_RANK.owner) return sendJson(response, 403, { error: 'Owner role required.' });
-    return sendJson(response, 200, { users: userStore.listUsers() });
+    return sendJson(response, 200, { users: await userStore.listUsers() });
   }
 
   if (pathname === '/api/users' && request.method === 'POST') {
     if (ROLE_RANK[effective.role] < ROLE_RANK.owner) return sendJson(response, 403, { error: 'Owner role required.' });
     const body = await readJson(request);
-    return sendJson(response, 201, { user: userStore.createUser(body) });
+    return sendJson(response, 201, { user: await userStore.createUser(body) });
   }
 
   if (/^\/api\/users\/\d+$/.test(pathname)) {
@@ -893,9 +897,9 @@ async function handleApi(request, response, url) {
     const userId = Number(pathname.split('/')[3]);
     if (request.method === 'PATCH') {
       const body = await readJson(request);
-      return sendJson(response, 200, { user: userStore.updateUser(userId, body) });
+      return sendJson(response, 200, { user: await userStore.updateUser(userId, body) });
     }
-    if (request.method === 'DELETE') return sendJson(response, 200, userStore.deleteUser(userId));
+    if (request.method === 'DELETE') return sendJson(response, 200, await userStore.deleteUser(userId));
   }
 
   if (pathname === '/api/annotations' && request.method === 'GET') {
@@ -987,7 +991,7 @@ async function handleApi(request, response, url) {
   }
 
   if (pathname === '/api/health') {
-    return sendJson(response, 200, { ...health.status({ eventBus }), semantic: semanticIndex.status(), auth: authMode() });
+    return sendJson(response, 200, { ...await health.status({ eventBus }), semantic: semanticIndex.status(), auth: await authMode() });
   }
 
   return sendJson(response, 404, { error: 'API route not found' });
@@ -1041,7 +1045,7 @@ async function main() {
   process.on('uncaughtException', error => console.error(`uncaughtException: ${error.stack || error}`));
   process.on('unhandledRejection', reason => console.error(`unhandledRejection: ${reason?.stack || reason}`));
   server.listen(PORT, HOST, async () => {
-    const mode = authMode();
+    const mode = await authMode();
     const loopback = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
     console.log(`Web Zotero ready on ${PORT} (bound to ${HOST})`);
     if (loopback) {

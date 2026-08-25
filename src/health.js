@@ -16,17 +16,23 @@ class HealthMonitor {
     this.errors = this.errors.slice(0, 20);
   }
 
-  /** Cheap liveness probe for one SQLite-backed store. */
-  probe(prepare) {
-    if (typeof prepare !== 'function') return null; // not provided
-    try { prepare(); return true; } catch { return false; }
+  /** Cheap liveness probe for one SQLite or PostgreSQL-backed store. */
+  probe(store) {
+    if (!store) return null; // not provided
+    try {
+      if (store.database) store.database.prepare('SELECT 1').get();       // node:sqlite
+      else if (store.pool) return store.pool.query('SELECT 1').then(() => true).catch(() => false);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
-  status({ eventBus = null } = {}) {
-    const zoteroOk = this.probe(() => this.zoteroDatabase.database.prepare('SELECT 1').get());
-    const webOk = this.probe(() => this.webStore.database.prepare('SELECT 1').get());
-    const usersOk = this.probe(() => this.userStore?.database.prepare('SELECT 1').get());
-    const annotationsOk = this.probe(() => this.annotationStore?.database.prepare('SELECT 1').get());
+  async status({ eventBus = null } = {}) {
+    const zoteroOk = this.probe(this.zoteroDatabase);
+    const webOk = this.probe(this.webStore);
+    const usersOk = await this.probe(this.userStore);
+    const annotationsOk = this.probe(this.annotationStore);
     return {
       ok: zoteroOk && webOk && usersOk !== false && annotationsOk !== false,
       startedAt: this.startedAt,
