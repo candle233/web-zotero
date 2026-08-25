@@ -27,6 +27,7 @@ const { UserStore, hashToken } = require('./users');
 const { PgUserStore } = require('./users-pg');
 const { WebAnnotationStore } = require('./annotations-store');
 const { PgWebAnnotationStore } = require('./annotations-store-pg');
+const { PgWorkspaceStore } = require('./workspaces-pg');
 const { sanitizeNoteHtml, noteHtmlToPlainText } = require('./notes-html');
 const { SemanticIndex } = require('./semantic');
 const { ask } = require('./ask');
@@ -66,6 +67,9 @@ const userStore = process.env.DATABASE_URL
 const annotationStore = process.env.DATABASE_URL
   ? new PgWebAnnotationStore(process.env.DATABASE_URL)
   : new WebAnnotationStore(DATA_DIR);
+const workspaceStore = process.env.DATABASE_URL
+  ? new PgWorkspaceStore(process.env.DATABASE_URL)
+  : null;
 const semanticIndex = new SemanticIndex(DATA_DIR, searchIndex);
 const eventBus = new EventBus();
 const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore, userStore, annotationStore });
@@ -908,6 +912,71 @@ async function handleApi(request, response, url) {
     if (request.method === 'DELETE') return sendJson(response, 200, await userStore.deleteUser(userId));
   }
 
+  // ------------------------------------------------------------ workspaces (R7b Phase 3)
+  if (pathname === '/api/workspaces' && request.method === 'GET') {
+    if (!workspaceStore) return sendJson(response, 501, { error: 'Workspaces require PostgreSQL mode.' });
+    if (!effective.user) return sendJson(response, 401, { error: 'Authentication required.' });
+    return sendJson(response, 200, { workspaces: await workspaceStore.listWorkspaces(effective.user.id) });
+  }
+
+  if (pathname === '/api/workspaces' && request.method === 'POST') {
+    if (!workspaceStore) return sendJson(response, 501, { error: 'Workspaces require PostgreSQL mode.' });
+    if (!effective.user) return sendJson(response, 401, { error: 'Authentication required.' });
+    const body = await readJson(request);
+    const workspace = await workspaceStore.createWorkspace({
+      name: body.name,
+      isPersonal: Boolean(body.isPersonal),
+      ownerId: effective.user.id
+    });
+    return sendJson(response, 201, { workspace });
+  }
+
+  if (/^\/api\/workspaces\/\d+$/.test(pathname)) {
+    if (!workspaceStore) return sendJson(response, 501, { error: 'Workspaces require PostgreSQL mode.' });
+    if (!effective.user) return sendJson(response, 401, { error: 'Authentication required.' });
+    const workspaceId = Number(pathname.split('/')[3]);
+    if (request.method === 'GET') {
+      return sendJson(response, 200, { workspace: await workspaceStore.getWorkspace(workspaceId, effective.user) });
+    }
+    if (request.method === 'PATCH') {
+      const body = await readJson(request);
+      return sendJson(response, 200, { workspace: await workspaceStore.updateWorkspace(workspaceId, body, effective.user) });
+    }
+    if (request.method === 'DELETE') {
+      return sendJson(response, 200, await workspaceStore.deleteWorkspace(workspaceId, effective.user));
+    }
+  }
+
+  if (/^\/api\/workspaces\/\d+\/members$/.test(pathname)) {
+    if (!workspaceStore) return sendJson(response, 501, { error: 'Workspaces require PostgreSQL mode.' });
+    if (!effective.user) return sendJson(response, 401, { error: 'Authentication required.' });
+    const workspaceId = Number(pathname.split('/')[3]);
+    if (request.method === 'GET') {
+      return sendJson(response, 200, { members: await workspaceStore.listMembers(workspaceId, effective.user) });
+    }
+    if (request.method === 'POST') {
+      const body = await readJson(request);
+      const member = await workspaceStore.addMember(workspaceId, body, effective.user);
+      return sendJson(response, 201, { member });
+    }
+  }
+
+  if (/^\/api\/workspaces\/\d+\/members\/\d+$/.test(pathname)) {
+    if (!workspaceStore) return sendJson(response, 501, { error: 'Workspaces require PostgreSQL mode.' });
+    if (!effective.user) return sendJson(response, 401, { error: 'Authentication required.' });
+    const [, , , wsId, , memberId] = pathname.split('/');
+    const workspaceId = Number(wsId);
+    const targetUserId = Number(memberId);
+    if (request.method === 'PATCH') {
+      const body = await readJson(request);
+      const member = await workspaceStore.updateMemberRole(workspaceId, targetUserId, body, effective.user);
+      return sendJson(response, 200, { member });
+    }
+    if (request.method === 'DELETE') {
+      return sendJson(response, 200, await workspaceStore.removeMember(workspaceId, targetUserId, effective.user));
+    }
+  }
+
   if (pathname === '/api/annotations' && request.method === 'GET') {
     const itemKey = url.searchParams.get('itemKey');
     if (!itemKey) return sendJson(response, 400, { error: 'Query parameter "itemKey" is required.' });
@@ -1091,6 +1160,7 @@ async function main() {
       if (userStore.close) await userStore.close();
       if (annotationStore.close) await annotationStore.close();
       else annotationStore.database?.close?.();
+      if (workspaceStore?.close) await workspaceStore.close();
       semanticIndex.close();
       zoteroDatabase.close();
       process.exit(0);
@@ -1104,3 +1174,5 @@ if (require.main === module) main().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
+
+module.exports = { main, handle, handleApi };
