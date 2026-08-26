@@ -217,6 +217,8 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .pdf-fallback p { margin: 0; font-size: 14px; }
 .pdf-fallback button { width: auto; }
 
+[hidden] { display: none !important; }
+
 /* Login overlay (replaces prompt()-based sign-in) */
 .login-overlay {
   position: fixed;
@@ -227,6 +229,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
   justify-content: center;
   background: rgba(5, 8, 15, 0.65);
   backdrop-filter: blur(2px);
+}
+.login-overlay[hidden] {
+  display: none !important;
 }
 .login-card {
   width: min(340px, calc(100vw - 32px));

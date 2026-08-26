@@ -147,10 +147,12 @@ function showLogin(mode) {
     elements.loginEmailRow.hidden = mode !== 'users';
     elements.loginError.textContent = '';
     panel.hidden = false;
+    panel.style.display = '';
     (mode === 'users' ? elements.loginEmail : elements.loginPassword).focus();
 
     const close = () => {
       panel.hidden = true;
+      panel.style.display = 'none';
       elements.loginForm.removeEventListener('submit', onSubmit);
       elements.loginCancel.removeEventListener('click', onCancel);
     };
