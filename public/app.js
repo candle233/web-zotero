@@ -187,8 +187,16 @@ function showLogin(mode) {
   });
 }
 
-async function login(mode) {
-  return showLogin(mode);
+let activeLoginPromise = null;
+
+function login(mode) {
+  if (state.token) return Promise.resolve(state.token);
+  if (!activeLoginPromise) {
+    activeLoginPromise = showLogin(mode).finally(() => {
+      activeLoginPromise = null;
+    });
+  }
+  return activeLoginPromise;
 }
 
 function setStatus(message, isError = false) {
