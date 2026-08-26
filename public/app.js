@@ -161,11 +161,13 @@ function showLogin(mode) {
       const email = elements.loginEmail.value.trim();
       const password = elements.loginPassword.value;
       if (!password) { fail('Password is required.'); return; }
+      if (mode === 'users' && !email) { fail('Email is required.'); return; }
       try {
+        const payloadBody = email ? { email, password } : { password };
         const result = await fetch('/api/auth', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(mode === 'users' ? { email, password } : { password })
+          body: JSON.stringify(payloadBody)
         });
         const payload = await result.json().catch(() => ({}));
         if (!result.ok) { fail(payload.error || 'Invalid credentials'); return; }

@@ -409,7 +409,7 @@ async function handleApi(request, response, url) {
 
   const principal = await resolvePrincipal(request, url);
   if (!principal && pathname !== '/api/auth') {
-    return sendJson(response, 401, { error: 'Unauthorized', auth: true, mode: await authMode().mode });
+    return sendJson(response, 401, { error: 'Unauthorized', auth: true, mode: (await authMode()).mode });
   }
   const effective = principal || { kind: 'anonymous', user: null, role: 'viewer' };
   if (request.method !== 'GET' && !READ_ONLY_POST_ROUTES.has(pathname)
@@ -1002,7 +1002,7 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/api/me' && request.method === 'GET') {
     return sendJson(response, 200, {
-      mode: await authMode().mode,
+      mode: (await authMode()).mode,
       user: effective.user
         ? { email: effective.user.email, displayName: effective.user.displayName, role: effective.user.role }
         : null
