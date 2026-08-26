@@ -47,7 +47,10 @@ function parseOcrResponse(payload) {
   else if (Array.isArray(payload.results)) {
     latex = payload.results.map(entry => (entry && typeof entry === 'object' ? String(entry.text || '') : String(entry || ''))).join(' ');
   }
-  latex = latex.trim().replace(/^\$\$?/, '').replace(/\$\$?$/, '').trim();
+  latex = latex.trim()
+    .replace(/^(\$\$|\$|\\\[)/, '')
+    .replace(/(\$\$|\$|\\\])$/, '')
+    .trim();
   if (!latex) throw httpError(422, 'No formula was recognized in the selected region — try a tighter selection.');
   return latex.slice(0, 10000);
 }
@@ -62,6 +65,17 @@ async function recognizeFormula(dataUrl, { url = DEFAULT_OCR_URL, timeoutMs = 30
   let response;
   try {
     response = await doFetch(url, { method: 'POST', body: form, signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok && (response.status >= 500 || response.status === 422)) {
+      // Fallback: try file_type=text_formula in case the crop contains mixed text/formula
+      const fallbackForm = new FormData();
+      fallbackForm.append('image', new Blob([buffer], { type: mimeType }), 'formula.png');
+      fallbackForm.append('file_type', 'text_formula');
+      fallbackForm.append('resized_shape', '768');
+      const fallbackRes = await doFetch(url, { method: 'POST', body: fallbackForm, signal: AbortSignal.timeout(timeoutMs) }).catch(() => null);
+      if (fallbackRes && fallbackRes.ok) {
+        response = fallbackRes;
+      }
+    }
   } catch (error) {
     const reason = error?.name === 'TimeoutError' ? 'timed out' : 'connection refused';
     throw httpError(503, `Formula OCR engine ${reason}. ${SETUP_HINT}`);

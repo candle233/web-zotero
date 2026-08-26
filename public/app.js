@@ -113,7 +113,7 @@ const state = {
 };
 
 const elements = {};
-['searchInput','semanticToggle','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','pdfFallback','fallbackAnnotatorButton','fallbackNewTabButton','openAnnotatorButton','newTabButton','aiResult','askInput','askButton','summarizeButton','extractTextButton','searchResults','resultCount','resultList','toast','backButton','closeSearch','lookupInput','lookupButton','lookupBody','closeLookup','logoutButton','loginPanel','loginForm','loginEmailRow','loginEmail','loginPassword','loginError','loginCancel']
+['searchInput','semanticToggle','searchButton','reindexButton','status','library','detailTitle','detailBody','readerView','pdfFrame','pdfFallback','fallbackAnnotatorButton','fallbackNewTabButton','openAnnotatorButton','newTabButton','aiResult','askInput','askButton','summarizeButton','searchResults','resultCount','resultList','toast','backButton','closeSearch','lookupInput','lookupButton','lookupBody','closeLookup','logoutButton','loginPanel','loginForm','loginEmailRow','loginEmail','loginPassword','loginError','loginCancel']
   .forEach(id => { elements[id] = document.getElementById(id); });
 
 function authHeaders(extra = {}) {
@@ -683,7 +683,6 @@ function showView(view) {
   document.getElementById(`${view}View`).classList.add('active');
   if (view !== 'reader') {
     elements.summarizeButton.hidden = true;
-    elements.extractTextButton.hidden = true;
     elements.askButton.hidden = true;
     elements.askInput.hidden = true;
     elements.openAnnotatorButton.hidden = true;
@@ -748,7 +747,6 @@ async function openReader(key, attachmentKey, fileName = '') {
     elements.aiResult.innerHTML = '<span class="muted">Open a paper and run AI reading to extract its main argument.</span>';
     await restoreProgress(key);
     elements.summarizeButton.hidden = false;
-    elements.extractTextButton.hidden = false;
     elements.askButton.hidden = false;
     elements.askInput.hidden = false;
     elements.openAnnotatorButton.hidden = false;
@@ -859,17 +857,6 @@ elements.askButton.addEventListener('click', askQuestion);
 elements.askInput.addEventListener('keydown', event => {
   if (event.key === 'Enter') askQuestion();
 });
-
-async function extractText() {
-  if (!state.activeKey || !state.activeAttachment) return;
-  elements.extractTextButton.disabled = true;
-  try {
-    const result = await request(`/api/items/${encodeURIComponent(state.activeKey)}/files/${encodeURIComponent(state.activeAttachment)}/text`);
-    elements.aiResult.innerHTML = `<h3>Extracted text</h3><div class="muted">${result.text.length.toLocaleString()} characters</div><pre>${escapeHtml(result.text.slice(0, 30000))}</pre>`;
-  } catch (error) {
-    elements.aiResult.textContent = error.message;
-  } finally { elements.extractTextButton.disabled = false; }
-}
 
 function renderSearch(data) {
   state.searchMode = Boolean(data.query);
