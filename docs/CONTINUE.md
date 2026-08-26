@@ -60,5 +60,10 @@
   - `users.js` 与 `users-pg.js` 升级异步 `crypto.scrypt`（`hashPasswordAsync` / `verifyPasswordAsync`），消除密码验证阻塞。
   - 每用户会话上限 `MAX_SESSIONS_PER_USER = 10`，超出自动回收最旧会话。
   - 批量导出 `GET /api/export/notes.md` 与 `GET /api/export/notes.json`（支持 collection/tag 筛选与 Markdown 格式打包）。
-  - `WebStore` 与 `PgWebStore` 实现 `listAllNotes()`；增强 `src/notes-html.js` 防注入白名单；新增 `tests/optimizations.test.js`。
+- **R9b：真实时协同编辑与 Presence 在线感知**（commit `a32a114`）：
+  - 引入实时在线协作者感知（`POST /api/items/:key/presence` 心跳上报 + `note_presence` SSE 事件广播），多人在同一笔记编辑时实时显示彩色头像气泡与工具提示。
+  - 实现基于 SSE 事件流的笔记实时变更广播与冲突合并（`POST /api/items/:key/notes` 成功后自动发布 `note.saved` 事件）。
+  - 编辑器无本地未保存修改时自动平滑同步远端新版本并提示作者；有本地未保存编辑时弹出实时冲突对比与双向合并横幅。
+  - 新增测试套件 [`tests/events.test.js`](file:///c:/Users/Mechrevo/Desktop/codeback/zotero-main/web-zotero/tests/events.test.js) 协同事件验证。
+
 
