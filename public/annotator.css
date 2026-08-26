@@ -315,3 +315,302 @@ body {
   cursor: pointer;
 }
 .wz-formula-recent button:hover { border-color: #2f9e6e; }
+
+/* Sidebar Tabs (Annotations vs TOC Outline) */
+.wz-sidebar-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--wz-border);
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+}
+.wz-sidebar-tab {
+  flex: 1;
+  background: #1d222d;
+  color: var(--wz-muted);
+  border: 1px solid var(--wz-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.wz-sidebar-tab:hover {
+  color: var(--wz-text);
+  border-color: #3b4252;
+}
+.wz-sidebar-tab.active {
+  background: #282e3d;
+  color: #fff;
+  border-color: var(--wz-accent);
+  font-weight: 600;
+}
+
+/* Sidebar Item Action Buttons */
+.wz-sidebar-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.wz-sidebar-quote-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0.6;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.wz-sidebar-quote-btn:hover {
+  opacity: 1;
+  background: rgba(124, 92, 255, 0.2);
+}
+
+/* Outline TOC Tree */
+.wz-toc-container {
+  font-size: 13px;
+}
+.wz-toc-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.wz-toc-level-1 { padding-left: 14px; }
+.wz-toc-level-2 { padding-left: 26px; }
+.wz-toc-level-3 { padding-left: 38px; }
+.wz-toc-item {
+  margin: 3px 0;
+}
+.wz-toc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--wz-text);
+  transition: background 0.12s ease;
+}
+.wz-toc-row.wz-toc-clickable {
+  cursor: pointer;
+}
+.wz-toc-row.wz-toc-clickable:hover {
+  background: #222733;
+  color: #fff;
+}
+.wz-toc-caret {
+  background: none;
+  border: none;
+  color: var(--wz-muted);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 10px;
+  line-height: 1;
+}
+.wz-toc-caret:hover { color: #fff; }
+.wz-toc-bullet {
+  color: var(--wz-muted);
+  font-size: 14px;
+  line-height: 1;
+  width: 12px;
+  text-align: center;
+}
+.wz-toc-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wz-toc-page {
+  color: var(--wz-muted);
+  font-size: 11px;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+/* Split-View Layout Container */
+.wz-annotator-root {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+.wz-pdf-pane {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.wz-split-mode .wz-pdf-pane {
+  flex: 1 1 58%;
+  border-right: 2px solid var(--wz-border);
+}
+
+/* Embedded TipTap Note Editor Pane */
+.wz-embedded-notes {
+  flex: 1 1 42%;
+  min-width: 320px;
+  max-width: 680px;
+  background: #14171f;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+.wz-embedded-notes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--wz-panel);
+  border-bottom: 1px solid var(--wz-border);
+}
+.wz-embedded-notes-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.wz-embedded-notes-status {
+  color: var(--wz-muted);
+  font-size: 12px;
+  font-weight: normal;
+}
+.wz-embedded-notes-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wz-note-save-btn {
+  background: var(--wz-accent) !important;
+  color: #fff !important;
+  border: none !important;
+  padding: 5px 12px !important;
+  font-size: 13px !important;
+  font-weight: 600;
+  border-radius: 6px !important;
+  cursor: pointer;
+}
+.wz-note-close-btn {
+  background: transparent !important;
+  border: none !important;
+  color: var(--wz-muted) !important;
+  font-size: 14px !important;
+  cursor: pointer;
+  padding: 4px 6px !important;
+}
+.wz-note-close-btn:hover {
+  color: #fff !important;
+}
+
+.wz-note-conflict-bar {
+  background: #3b2a1a;
+  border-bottom: 1px solid #d97706;
+  color: #fef3c7;
+  padding: 6px 12px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wz-note-conflict-bar button {
+  background: #d97706;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* Embedded TipTap Toolbar */
+.wz-embedded-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 6px 12px;
+  background: #191c24;
+  border-bottom: 1px solid var(--wz-border);
+}
+.wz-embedded-toolbar button {
+  min-width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--wz-text);
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.wz-embedded-toolbar button:hover {
+  background: #252a36;
+}
+.wz-embedded-toolbar button.active {
+  background: #2e3547;
+  border-color: var(--wz-accent);
+  color: #fff;
+}
+.wz-embedded-toolbar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Embedded TipTap Document Body */
+.wz-embedded-notes-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+.wz-embedded-note-doc {
+  outline: none;
+  min-height: 280px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--wz-text);
+}
+.wz-embedded-note-doc h2 { font-size: 18px; margin: 16px 0 6px; }
+.wz-embedded-note-doc h3 { font-size: 15px; margin: 12px 0 4px; }
+.wz-embedded-note-doc blockquote {
+  margin: 10px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--wz-accent);
+  background: rgba(124, 92, 255, 0.08);
+  border-radius: 0 6px 6px 0;
+  color: #d1d5db;
+}
+.wz-embedded-note-doc a {
+  color: #93c5fd;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.wz-embedded-note-doc a[data-page] {
+  background: rgba(59, 130, 246, 0.15);
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-decoration: none;
+  font-weight: 500;
+  display: inline-block;
+  margin-left: 4px;
+}
+.wz-embedded-note-doc a[data-page]:hover {
+  background: rgba(59, 130, 246, 0.35);
+  color: #fff;
+}
+.wz-embedded-note-doc pre {
+  background: #0d0f14;
+  border-radius: 6px;
+  padding: 8px 12px;
+  overflow-x: auto;
+  font-size: 12px;
+}
+.wz-embedded-note-doc code {
+  background: #0d0f14;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+

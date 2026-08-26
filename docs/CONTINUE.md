@@ -59,11 +59,16 @@
 - **小项优化包**（commit `189449b`）：
   - `users.js` 与 `users-pg.js` 升级异步 `crypto.scrypt`（`hashPasswordAsync` / `verifyPasswordAsync`），消除密码验证阻塞。
   - 每用户会话上限 `MAX_SESSIONS_PER_USER = 10`，超出自动回收最旧会话。
-  - 批量导出 `GET /api/export/notes.md` 与 `GET /api/export/notes.json`（支持 collection/tag 筛选与 Markdown 格式打包）。
 - **R9b：真实时协同编辑与 Presence 在线感知**（commit `a32a114`）：
   - 引入实时在线协作者感知（`POST /api/items/:key/presence` 心跳上报 + `note_presence` SSE 事件广播），多人在同一笔记编辑时实时显示彩色头像气泡与工具提示。
   - 实现基于 SSE 事件流的笔记实时变更广播与冲突合并（`POST /api/items/:key/notes` 成功后自动发布 `note.saved` 事件）。
   - 编辑器无本地未保存修改时自动平滑同步远端新版本并提示作者；有本地未保存编辑时弹出实时冲突对比与双向合并横幅。
-  - 新增测试套件 [`tests/events.test.js`](file:///c:/Users/Mechrevo/Desktop/codeback/zotero-main/web-zotero/tests/events.test.js) 协同事件验证。
+  - 新增测试套件 `tests/events.test.js` 协同事件验证。
+- **PDF 大纲目录 (TOC) & 边读边写分屏笔记工作区 (Split-View Note Workspace)**：
+  - PDF 大纲解析与多级嵌套树形书签导航（`src/pdf/outline.ts`、`src/pdf/PdfAnnotationViewer.tsx`）：自动解析 `pdfDoc.getOutline()` 具名目的地和对象引用，侧边栏支持 `📝 批注` 与 `📑 目录` 双选项卡自由切换，点击章节书签平滑定位翻页。
+  - 边读边写分屏模式（Split-View）：PDF 阅读器顶部工具栏增加 `📖 笔记分屏` 切换，右侧无缝嵌入 TipTap 富文本笔记编辑器（`src/pdf/EmbeddedNoteEditor.tsx`）。
+  - 一键引用到笔记（Quote to Note）：选中文本的悬浮工具栏和侧边栏批注卡片均配备 `📌 引用` 按钮，自动格式化并插入引用块与带原页面锚点属性的页码链接（`<a href="#page=N" data-page="N">p. N</a>`）；在笔记中点击页码锚点即可双向瞬时跳转到 PDF 对应页面。
+  - 新增测试套件 `tests/outline-splitview.test.ts`（大纲树形节点计数、目的地解析与引用 HTML 格式化全量通过）。
+
 
 

@@ -5,7 +5,8 @@ import { selectionToNormalizedRects, viewportRectToNormalized } from './coordina
 import type { Rect, ViewportLike } from './coordinates.ts';
 import { AnnotationLayer } from './AnnotationLayer.tsx';
 import { ANNOTATION_COLORS } from './types.ts';
-import type { PdfAnnotation } from './types.ts';
+import type { OutlineNode, PdfAnnotation } from './types.ts';
+import { countOutlineNodes, resolvePdfOutline } from './outline.ts';
 
 export interface PdfAnnotationViewerProps {
   pdfUrl: string;
@@ -27,6 +28,10 @@ export interface PdfAnnotationViewerProps {
    * the entry point (it owns auth + the /api/formula-ocr call).
    */
   onFormulaOcr?: (dataUrl: string) => Promise<{ latex: string }>;
+  /** Split view & quote linkage */
+  onQuoteToNote?: (quoteText: string, pageIndex: number) => void;
+  isSplit?: boolean;
+  onToggleSplit?: () => void;
 }
 
 interface PageViewState {
@@ -91,6 +96,8 @@ function sortAnnotations(annotations: readonly PdfAnnotation[]): PdfAnnotation[]
 export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
   const { pdfUrl, httpHeaders, workerUrl, annotations } = props;
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
+  const [outline, setOutline] = useState<OutlineNode[] | null>(null);
+  const [sidebarTab, setSidebarTab] = useState<'annotations' | 'outline'>('annotations');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [scale, setScale] = useState(1.25);
   const [rotation, setRotation] = useState(0);
@@ -128,10 +135,22 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
     const task = getDocument({ url: pdfUrl, httpHeaders, withCredentials: true });
     loadingTaskRef.current = task;
     task.promise.then(
-      doc => {
+      async doc => {
         if (cancelled) return;
         setPdfDoc(doc);
         props.onDocumentLoaded?.({ pages: doc.numPages });
+        try {
+          const rawOutline = await doc.getOutline();
+          if (cancelled) return;
+          if (Array.isArray(rawOutline) && rawOutline.length > 0) {
+            const resolved = await resolvePdfOutline(doc, rawOutline);
+            if (!cancelled) setOutline(resolved);
+          } else {
+            if (!cancelled) setOutline([]);
+          }
+        } catch {
+          if (!cancelled) setOutline([]);
+        }
       },
       error => {
         if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
@@ -301,6 +320,14 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
     [handleTextSelect, areaMode],
   );
 
+  const jumpToPage = useCallback((targetPage: number) => {
+    if (targetPage >= pageLimit) setPageLimit(targetPage + 10);
+    setTimeout(() => {
+      const pageEl = scrollRef.current?.querySelector<HTMLElement>(`[data-page-index="${targetPage}"]`);
+      pageEl?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 60);
+  }, [pageLimit]);
+
   const sorted = sortAnnotations(annotations);
   const pages = Math.min(pdfDoc?.numPages ?? 0, pageLimit);
 
@@ -342,6 +369,17 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
         >
           ∑ LaTeX
         </button>
+        {props.onToggleSplit && (
+          <button
+            type="button"
+            className={`wz-area-toggle wz-split-toggle${props.isSplit ? ' wz-area-active' : ''}`}
+            aria-pressed={props.isSplit}
+            title="Toggle Split-View Note Editor (side-by-side reading & writing)"
+            onClick={props.onToggleSplit}
+          >
+            📖 笔记分屏
+          </button>
+        )}
       </header>
       <div className="wz-body">
         <div className="wz-scroll" ref={scrollRef} onMouseUp={onMouseUp} data-testid="pdf-scroll">
@@ -357,12 +395,12 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
               annotations={annotations.filter(annotation => annotation.pageIndex === index)}
               selectedId={selectedId}
               flashId={flashId}
-                  onSelect={selectOnPage}
-                  areaMode={areaMode}
-                  formulaMode={formulaMode}
-                  onAreaSelect={(rect, at) => void handleAreaSelect(index, rect, at)}
-                  onFormulaCrop={dataUrl => void handleFormulaCrop(dataUrl)}
-                />
+              onSelect={selectOnPage}
+              areaMode={areaMode}
+              formulaMode={formulaMode}
+              onAreaSelect={(rect, at) => void handleAreaSelect(index, rect, at)}
+              onFormulaCrop={dataUrl => void handleFormulaCrop(dataUrl)}
+            />
           ))}
           {pdfDoc && pdfDoc.numPages > pageLimit && (
             <button type="button" className="wz-load-more" onClick={() => setPageLimit(limit => limit + 20)}>
@@ -370,39 +408,82 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
             </button>
           )}
         </div>
-        <aside className="wz-sidebar" data-testid="annotation-sidebar">
-          <h3>Annotations ({sorted.length})</h3>
-          {sorted.length === 0 && <p className="wz-empty">Select text in the PDF to create a highlight.</p>}
-          <ol>
-            {sorted.map(annotation => (
-              <li
-                key={annotation.id}
-                className={annotation.id === selectedId ? 'wz-selected-item' : ''}
-                onClick={() => locateAnnotation(annotation)}
-              >
-                <div className="wz-sidebar-item-head">
-                  <span className="wz-chip" style={{ backgroundColor: annotation.color }}>
-                    p. {annotation.pageIndex + 1}
-                  </span>
-                  <button
-                    type="button"
-                    className="wz-sidebar-delete"
-                    title="Delete this annotation"
-                    aria-label={`Delete annotation on page ${annotation.pageIndex + 1}`}
-                    onClick={event => {
-                      event.stopPropagation();
-                      void props.onDelete(annotation.id);
-                      if (toolbar?.annotationId === annotation.id) setToolbar(null);
-                    }}
+        <aside className="wz-sidebar" data-testid="pdf-sidebar">
+          <div className="wz-sidebar-tabs">
+            <button
+              type="button"
+              className={`wz-sidebar-tab ${sidebarTab === 'annotations' ? 'active' : ''}`}
+              onClick={() => setSidebarTab('annotations')}
+            >
+              📝 批注 ({sorted.length})
+            </button>
+            <button
+              type="button"
+              className={`wz-sidebar-tab ${sidebarTab === 'outline' ? 'active' : ''}`}
+              onClick={() => setSidebarTab('outline')}
+            >
+              📑 目录 {outline ? `(${countOutlineNodes(outline)})` : ''}
+            </button>
+          </div>
+
+          {sidebarTab === 'annotations' ? (
+            <>
+              {sorted.length === 0 && <p className="wz-empty">在 PDF 中选取文字即可添加高亮与批注。</p>}
+              <ol>
+                {sorted.map(annotation => (
+                  <li
+                    key={annotation.id}
+                    className={annotation.id === selectedId ? 'wz-selected-item' : ''}
+                    onClick={() => locateAnnotation(annotation)}
                   >
-                    🗑
-                  </button>
-                </div>
-                {annotation.quoteText && <blockquote>{annotation.quoteText}</blockquote>}
-                {annotation.commentText && <p className="wz-comment">{annotation.commentText}</p>}
-              </li>
-            ))}
-          </ol>
+                    <div className="wz-sidebar-item-head">
+                      <span className="wz-chip" style={{ backgroundColor: annotation.color }}>
+                        p. {annotation.pageIndex + 1}
+                      </span>
+                      <div className="wz-sidebar-item-actions">
+                        {props.onQuoteToNote && annotation.quoteText && (
+                          <button
+                            type="button"
+                            className="wz-sidebar-quote-btn"
+                            title="引用到笔记 (Quote to Note)"
+                            onClick={event => {
+                              event.stopPropagation();
+                              props.onQuoteToNote?.(annotation.quoteText, annotation.pageIndex);
+                            }}
+                          >
+                            📌
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="wz-sidebar-delete"
+                          title="Delete this annotation"
+                          aria-label={`Delete annotation on page ${annotation.pageIndex + 1}`}
+                          onClick={event => {
+                            event.stopPropagation();
+                            void props.onDelete(annotation.id);
+                            if (toolbar?.annotationId === annotation.id) setToolbar(null);
+                          }}
+                        >
+                          🗑
+                        </button>
+                      </div>
+                    </div>
+                    {annotation.quoteText && <blockquote>{annotation.quoteText}</blockquote>}
+                    {annotation.commentText && <p className="wz-comment">{annotation.commentText}</p>}
+                  </li>
+                ))}
+              </ol>
+            </>
+          ) : (
+            <div className="wz-toc-container" data-testid="pdf-toc">
+              {outline === null && <p className="wz-empty">加载目录中…</p>}
+              {outline && outline.length === 0 && <p className="wz-empty">该 PDF 未包含目录大纲书签。</p>}
+              {outline && outline.length > 0 && (
+                <OutlineTree nodes={outline} onSelect={jumpToPage} />
+              )}
+            </div>
+          )}
         </aside>
       </div>
       {toolbar && (
@@ -413,6 +494,7 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
           onColor={color => void changeColor(toolbar.annotationId, color)}
           onComment={text => void props.onUpdate(toolbar.annotationId, { commentText: text })}
           onDelete={() => void removeAnnotation(toolbar.annotationId)}
+          onQuoteToNote={props.onQuoteToNote}
           onClose={() => setToolbar(null)}
         />
       )}
@@ -616,6 +698,58 @@ function PdfPageView({ pdf, pageIndex, scale, rotation, viewportSink, annotation
   );
 }
 
+interface OutlineTreeProps {
+  nodes: OutlineNode[];
+  onSelect: (pageIndex: number) => void;
+  level?: number;
+}
+
+function OutlineTree({ nodes, onSelect, level = 0 }: OutlineTreeProps) {
+  const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
+
+  return (
+    <ul className={`wz-toc-tree wz-toc-level-${level}`}>
+      {nodes.map((node, index) => {
+        const hasChildren = Array.isArray(node.items) && node.items.length > 0;
+        const isCollapsed = collapsed[index];
+        return (
+          <li key={`${node.title}-${index}`} className="wz-toc-item">
+            <div
+              className={`wz-toc-row ${node.pageIndex !== undefined ? 'wz-toc-clickable' : ''}`}
+              onClick={() => {
+                if (node.pageIndex !== undefined) onSelect(node.pageIndex);
+              }}
+            >
+              {hasChildren ? (
+                <button
+                  type="button"
+                  className="wz-toc-caret"
+                  onClick={e => {
+                    e.stopPropagation();
+                    setCollapsed(prev => ({ ...prev, [index]: !prev[index] }));
+                  }}
+                  aria-label={isCollapsed ? 'Expand section' : 'Collapse section'}
+                >
+                  {isCollapsed ? '▶' : '▼'}
+                </button>
+              ) : (
+                <span className="wz-toc-bullet">•</span>
+              )}
+              <span className="wz-toc-title" title={node.title}>{node.title}</span>
+              {node.pageIndex !== undefined && (
+                <span className="wz-toc-page">p. {node.pageIndex + 1}</span>
+              )}
+            </div>
+            {hasChildren && !isCollapsed && (
+              <OutlineTree nodes={node.items} onSelect={onSelect} level={level + 1} />
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 interface FloatingToolbarProps {
   x: number;
   y: number;
@@ -623,10 +757,11 @@ interface FloatingToolbarProps {
   onColor: (color: string) => void;
   onComment: (text: string) => void;
   onDelete: () => void;
+  onQuoteToNote?: (quoteText: string, pageIndex: number) => void;
   onClose: () => void;
 }
 
-function FloatingToolbar({ x, y, annotation, onColor, onComment, onDelete, onClose }: FloatingToolbarProps) {
+function FloatingToolbar({ x, y, annotation, onColor, onComment, onDelete, onQuoteToNote, onClose }: FloatingToolbarProps) {
   const [draftComment, setDraftComment] = useState('');
   const [editing, setEditing] = useState(false);
   useEffect(() => setDraftComment(annotation?.commentText ?? ''), [annotation?.id, annotation?.commentText]);
@@ -647,6 +782,19 @@ function FloatingToolbar({ x, y, annotation, onColor, onComment, onDelete, onClo
         />
       ))}
       <button type="button" onClick={() => setEditing(value => !value)} aria-label="Add note">📝</button>
+      {onQuoteToNote && annotation?.quoteText && (
+        <button
+          type="button"
+          className="wz-quote-btn"
+          onClick={() => {
+            onQuoteToNote(annotation.quoteText, annotation.pageIndex);
+            onClose();
+          }}
+          title="引用到笔记 (Quote to Note)"
+        >
+          📌
+        </button>
+      )}
       {editing && (
         <div className="wz-note-editor">
           <textarea

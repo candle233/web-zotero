@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { PdfAnnotationViewer } from './PdfAnnotationViewer.tsx';
+import { EmbeddedNoteEditor } from './EmbeddedNoteEditor.tsx';
+import type { EmbeddedNoteEditorHandle } from './EmbeddedNoteEditor.tsx';
 import type { PdfAnnotation } from './types.ts';
 
 /**
@@ -81,13 +83,22 @@ function AnnotatorApp() {
   const attachmentKey = params.get('file') || '';
   const title = params.get('title') || itemKey;
   const token = localStorage.getItem('web-zotero-token') || '';
-  const [annotations, setAnnotations] = React.useState<PdfAnnotation[]>([]);
-  const [syncStatus, setSyncStatus] = React.useState('Loading annotations…');
+  const [annotations, setAnnotations] = useState<PdfAnnotation[]>([]);
+  const [syncStatus, setSyncStatus] = useState('Loading annotations…');
+  const [isSplit, setIsSplit] = useState(false);
+  const noteEditorRef = useRef<EmbeddedNoteEditorHandle | null>(null);
 
-  const authHeaders = React.useMemo(
+  const authHeaders = useMemo(
     () => ({ 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }),
     [token],
   );
+
+  const handleQuoteToNote = useCallback((quoteText: string, pageIndex: number) => {
+    if (!isSplit) setIsSplit(true);
+    setTimeout(() => {
+      noteEditorRef.current?.insertQuote(quoteText, pageIndex);
+    }, 150);
+  }, [isSplit]);
 
   React.useEffect(() => {
     if (!itemKey || !attachmentKey) return;
@@ -160,7 +171,7 @@ function AnnotatorApp() {
     };
   }, [itemKey, attachmentKey, token]);
 
-  const persist = React.useCallback(
+  const persist = useCallback(
     (next: PdfAnnotation[]) => {
       setAnnotations(next);
       if (itemKey && attachmentKey) writeLocal(itemKey, attachmentKey, next);
@@ -168,7 +179,7 @@ function AnnotatorApp() {
     [itemKey, attachmentKey],
   );
 
-  const createOnServer = React.useCallback(
+  const createOnServer = useCallback(
     async (annotation: PdfAnnotation) => {
       try {
         const response = await fetch('/api/annotations', {
@@ -206,7 +217,7 @@ function AnnotatorApp() {
     [itemKey, attachmentKey, authHeaders],
   );
 
-  const updateOnServer = React.useCallback(
+  const updateOnServer = useCallback(
     async (id: string, patch: Partial<PdfAnnotation>) => {
       const target = annotations.find(entry => entry.id === id);
       if (!target?.serverId) return;
@@ -225,7 +236,7 @@ function AnnotatorApp() {
     [annotations, authHeaders],
   );
 
-  const deleteOnServer = React.useCallback(
+  const deleteOnServer = useCallback(
     async (id: string) => {
       const target = annotations.find(entry => entry.id === id);
       if (!target?.serverId) return;
@@ -243,7 +254,7 @@ function AnnotatorApp() {
     [annotations, authHeaders],
   );
 
-  const formulaHistory = React.useCallback(
+  const formulaHistory = useCallback(
     async () => {
       const response = await fetch('/api/formulas?limit=8', { headers: authHeaders });
       if (!response.ok) return { formulas: [] };
@@ -252,7 +263,7 @@ function AnnotatorApp() {
     [authHeaders],
   );
 
-  const formulaOcr = React.useCallback(
+  const formulaOcr = useCallback(
     async (dataUrl: string): Promise<{ latex: string }> => {
       const response = await fetch('/api/formula-ocr', {
         method: 'POST',
@@ -276,45 +287,62 @@ function AnnotatorApp() {
   }
 
   return (
-    <div>
-      <PdfAnnotationViewer
-        pdfUrl={`/api/items/${encodeURIComponent(itemKey)}/files/${encodeURIComponent(attachmentKey)}`}
-        httpHeaders={token ? { authorization: `Bearer ${token}` } : undefined}
-        workerUrl="/vendor/pdf.worker.min.mjs"
-        initialPage={Number(params.get('page')) || undefined}
-        annotations={annotations}
-        onCreate={annotation => {
-          persist([...annotations, annotation]);
-          void createOnServer(annotation);
-        }}
-        onUpdate={(id, patch) => {
-          persist(annotations.map(entry => (entry.id === id ? { ...entry, ...patch } : entry)));
-          void updateOnServer(id, patch);
-        }}
-        onDelete={id => {
-          persist(annotations.filter(entry => entry.id !== id));
-          void deleteOnServer(id);
-        }}
-        onFormulaOcr={formulaOcr}
-        formulaHistory={formulaHistory}
-      />
-      <div className="wz-export-row">
-        <span className="wz-sync-status" data-testid="sync-status">{syncStatus}</span>
-        <button
-          type="button"
-          onClick={() => {
-            const markdown = annotationsToMarkdown(annotations, title);
-            const blob = new Blob([markdown], { type: 'text/markdown' });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = `${itemKey}-annotations.md`;
-            link.click();
-            URL.revokeObjectURL(link.href);
+    <div className={`wz-annotator-root ${isSplit ? 'wz-split-mode' : ''}`}>
+      <div className="wz-pdf-pane">
+        <PdfAnnotationViewer
+          pdfUrl={`/api/items/${encodeURIComponent(itemKey)}/files/${encodeURIComponent(attachmentKey)}`}
+          httpHeaders={token ? { authorization: `Bearer ${token}` } : undefined}
+          workerUrl="/vendor/pdf.worker.min.mjs"
+          initialPage={Number(params.get('page')) || undefined}
+          annotations={annotations}
+          onCreate={annotation => {
+            persist([...annotations, annotation]);
+            void createOnServer(annotation);
           }}
-        >
-          Export annotations as Markdown
-        </button>
+          onUpdate={(id, patch) => {
+            persist(annotations.map(entry => (entry.id === id ? { ...entry, ...patch } : entry)));
+            void updateOnServer(id, patch);
+          }}
+          onDelete={id => {
+            persist(annotations.filter(entry => entry.id !== id));
+            void deleteOnServer(id);
+          }}
+          onFormulaOcr={formulaOcr}
+          formulaHistory={formulaHistory}
+          onQuoteToNote={handleQuoteToNote}
+          isSplit={isSplit}
+          onToggleSplit={() => setIsSplit(s => !s)}
+        />
+        <div className="wz-export-row">
+          <span className="wz-sync-status" data-testid="sync-status">{syncStatus}</span>
+          <button
+            type="button"
+            onClick={() => {
+              const markdown = annotationsToMarkdown(annotations, title);
+              const blob = new Blob([markdown], { type: 'text/markdown' });
+              const link = document.createElement('a');
+              link.href = URL.createObjectURL(blob);
+              link.download = `${itemKey}-annotations.md`;
+              link.click();
+              URL.revokeObjectURL(link.href);
+            }}
+          >
+            Export annotations as Markdown
+          </button>
+        </div>
       </div>
+      {isSplit && (
+        <EmbeddedNoteEditor
+          ref={noteEditorRef}
+          itemKey={itemKey}
+          token={token}
+          onJumpPage={pageIdx => {
+            const target = document.querySelector<HTMLElement>(`[data-page-index="${pageIdx}"]`);
+            target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }}
+          onClose={() => setIsSplit(false)}
+        />
+      )}
     </div>
   );
 }

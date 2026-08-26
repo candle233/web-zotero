@@ -26,3 +26,10 @@ export function annotationLabel(annotation: PdfAnnotation): string {
   const kind = { highlight: 'Highlight', rect: 'Area', note: 'Note' }[annotation.type];
   return `p. ${annotation.pageIndex + 1} · ${kind}`;
 }
+
+export interface OutlineNode {
+  title: string;
+  dest: unknown;
+  pageIndex?: number;
+  items: OutlineNode[];
+}
