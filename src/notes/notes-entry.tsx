@@ -115,6 +115,20 @@ function LinkPicker(props: { onClose: () => void; onPick: (title: string) => voi
   );
 }
 
+interface Collaborator {
+  email: string;
+  displayName: string;
+  color: string;
+  lastSeen: number;
+}
+
+function userColor(name: string): string {
+  const colors = ['#e11d48', '#d97706', '#059669', '#2563eb', '#7c3aed', '#db2777', '#0891b2', '#4f46e5'];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash) + name.charCodeAt(i);
+  return colors[Math.abs(hash) % colors.length];
+}
+
 function NotesApp() {
   const params = new URLSearchParams(window.location.search);
   const itemKey = params.get('item') || '';
@@ -123,11 +137,14 @@ function NotesApp() {
   const [status, setStatus] = React.useState('Loading…');
   const [saving, setSaving] = React.useState(false);
   const [noteVersion, setNoteVersion] = React.useState<number | null>(null);
-  const [conflict, setConflict] = React.useState<{ serverHtml: string; serverText: string } | null>(null);
+  const [conflict, setConflict] = React.useState<{ serverHtml: string; serverText: string; author?: string; version?: number } | null>(null);
   const [versionsOpen, setVersionsOpen] = React.useState(false);
   const [versions, setVersions] = React.useState<{ id: number; version: number; createdAt: string }[]>([]);
   const [wordCount, setWordCount] = React.useState(0);
   const [linkPickerOpen, setLinkPickerOpen] = React.useState(false);
+  const [collaborators, setCollaborators] = React.useState<Map<string, Collaborator>>(new Map());
+
+  const lastSavedHtmlRef = React.useRef<string>('');
 
   const editor = useEditor({
     extensions: [StarterKit.configure({
@@ -150,10 +167,11 @@ function NotesApp() {
     if (!editor || saving) return;
     setSaving(true);
     try {
+      const html = editor.getHTML();
       const response = await fetch(`/api/items/${encodeURIComponent(itemKey)}/notes`, {
         method: 'POST',
         headers: authHeaders,
-        body: JSON.stringify({ html: editor.getHTML(), version: force ? null : noteVersion }),
+        body: JSON.stringify({ html, version: force ? null : noteVersion }),
       });
       const payload = await response.json().catch(() => ({}));
       if (response.status === 409 && payload.conflict && payload.current) {
@@ -166,6 +184,7 @@ function NotesApp() {
       if (!response.ok) throw new Error(payload.error || `${response.status} ${response.statusText}`);
       setConflict(null);
       setNoteVersion(payload.version ?? null);
+      lastSavedHtmlRef.current = html;
       setStatus(`Saved v${payload.version ?? '?'} · ${new Date(payload.updatedAt || Date.now()).toLocaleTimeString()}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Save failed');
@@ -183,7 +202,9 @@ function NotesApp() {
         if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
         const note = (await response.json()) as NotePayload;
         if (cancelled) return;
-        editor.commands.setContent(note.html || legacyTextToHtml(note.content || ''), { emitUpdate: true });
+        const initialHtml = note.html || legacyTextToHtml(note.content || '');
+        editor.commands.setContent(initialHtml, { emitUpdate: true });
+        lastSavedHtmlRef.current = initialHtml;
         setWordCount(editor.getText().trim().split(/\s+/).filter(Boolean).length);
         setNoteVersion(note.version ?? null);
         setConflict(null);
@@ -196,6 +217,96 @@ function NotesApp() {
       cancelled = true;
     };
   }, [editor, itemKey, authHeaders]);
+
+  // Real-time SSE Live Collaboration & Remote Save Event Subscription
+  React.useEffect(() => {
+    if (!itemKey) return;
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
+    const es = new EventSource(`/api/events${tokenParam}`);
+
+    es.addEventListener('note_presence', (evt: MessageEvent) => {
+      try {
+        const data = JSON.parse(evt.data);
+        if (data.itemKey === itemKey && data.user) {
+          setCollaborators(prev => {
+            const next = new Map(prev);
+            next.set(data.user.email, {
+              email: data.user.email,
+              displayName: data.user.displayName || data.user.email,
+              color: data.user.color || userColor(data.user.email),
+              lastSeen: Date.now(),
+            });
+            return next;
+          });
+        }
+      } catch {}
+    });
+
+    es.addEventListener('note', (evt: MessageEvent) => {
+      try {
+        const data = JSON.parse(evt.data);
+        if (data.itemKey === itemKey && data.action === 'saved') {
+          const currentHtml = editor ? editor.getHTML() : '';
+          const isDirty = currentHtml !== lastSavedHtmlRef.current;
+          if (!isDirty && editor) {
+            const nextHtml = data.html || legacyTextToHtml(data.content || '');
+            editor.commands.setContent(nextHtml, { emitUpdate: true });
+            lastSavedHtmlRef.current = nextHtml;
+            setNoteVersion(data.version ?? null);
+            setConflict(null);
+            setStatus(`📝 ${data.by || 'Someone'} 更新了笔记至 v${data.version ?? '?'}`);
+          } else if (editor) {
+            setConflict({
+              serverHtml: data.html || '',
+              serverText: data.content || '',
+              author: data.by,
+              version: data.version,
+            });
+            setStatus(`⚠️ ${data.by || 'Someone'} 保存了新版本 (v${data.version ?? '?'})。`);
+          }
+        }
+      } catch {}
+    });
+
+    return () => {
+      es.close();
+    };
+  }, [itemKey, token, editor]);
+
+  // Presence heartbeat & prune inactive collaborators
+  React.useEffect(() => {
+    if (!itemKey) return;
+    const sendHeartbeat = () => {
+      fetch(`/api/items/${encodeURIComponent(itemKey)}/presence`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ state: 'editing', color: userColor(token || 'local') }),
+      }).catch(() => {});
+    };
+    sendHeartbeat();
+    const interval = setInterval(sendHeartbeat, 15000);
+
+    const prune = setInterval(() => {
+      const now = Date.now();
+      setCollaborators(prev => {
+        let changed = false;
+        const next = new Map();
+        for (const [k, v] of prev.entries()) {
+          if (now - v.lastSeen < 45000) {
+            next.set(k, v);
+          } else {
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 10000);
+
+    return () => {
+      clearInterval(interval);
+      clearInterval(prune);
+    };
+  }, [itemKey, authHeaders, token]);
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -217,6 +328,20 @@ function NotesApp() {
       <header className="notes-header">
         <a href="/" className="notes-back">← Library</a>
         <h1 className="notes-title">{title}</h1>
+        {collaborators.size > 0 && (
+          <div className="notes-collaborators" data-testid="notes-collaborators" title="当前在线协作者">
+            {Array.from(collaborators.values()).map(c => (
+              <span
+                key={c.email}
+                className="notes-avatar"
+                style={{ backgroundColor: c.color }}
+                title={`${c.displayName} (${c.email})`}
+              >
+                {c.displayName.charAt(0).toUpperCase()}
+              </span>
+            ))}
+          </div>
+        )}
         <span className="notes-status" data-testid="notes-status">{status}</span>
         <button type="button" className="notes-save" onClick={() => void saveNote()} disabled={saving || !editor}>
           {saving ? 'Saving…' : 'Save (Ctrl+S)'}
@@ -224,13 +349,14 @@ function NotesApp() {
       </header>
       {conflict && (
         <div className="notes-conflict" data-testid="notes-conflict">
-          <p>⚠️ 服务器上有更新的版本（他人已保存）。你的修改仍在编辑器里。</p>
+          <p>⚠️ {conflict.author ? `${conflict.author} ` : ''}在服务器上保存了新版本{conflict.version ? ` (v${conflict.version})` : ''}。你的未保存修改仍在编辑器中。</p>
           <button type="button" onClick={() => void saveNote({ force: true })}>
             用我的版本覆盖
           </button>
           <button type="button" onClick={() => {
             if (!editor) return;
             editor.commands.setContent(conflict.serverHtml || '', { emitUpdate: true });
+            lastSavedHtmlRef.current = conflict.serverHtml || '';
             setConflict(null);
             setStatus('Loaded the server version into the editor.');
           }}>

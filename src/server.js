@@ -600,16 +600,34 @@ async function handleApi(request, response, url) {
     const itemKey = decodeURIComponent(pathname.split('/')[3]);
     if (request.method === 'GET') return sendJson(response, 200, await webStore.getNote(itemKey));
     if (request.method === 'DELETE') {
-      return sendJson(response, 200, await webStore.deleteNote(itemKey));
+      const result = await webStore.deleteNote(itemKey);
+      eventBus.publish('note', {
+        action: 'deleted',
+        itemKey,
+        by: effective.user ? (effective.user.displayName || effective.user.email) : 'Someone'
+      });
+      return sendJson(response, 200, result);
     }
     const body = await readJson(request);
     const expectedVersion = body.version == null ? null : Number(body.version);
     try {
+      let saved;
       if (typeof body.html === 'string') {
         const html = sanitizeNoteHtml(body.html.slice(0, 210000));
-        return sendJson(response, 200, await webStore.saveNote(itemKey, noteHtmlToPlainText(html), html, expectedVersion));
+        saved = await webStore.saveNote(itemKey, noteHtmlToPlainText(html), html, expectedVersion);
+      } else {
+        saved = await webStore.saveNote(itemKey, String(body.content || '').slice(0, 200000), null, expectedVersion);
       }
-      return sendJson(response, 200, await webStore.saveNote(itemKey, String(body.content || '').slice(0, 200000), null, expectedVersion));
+      eventBus.publish('note', {
+        action: 'saved',
+        itemKey,
+        version: saved.version,
+        updatedAt: saved.updatedAt,
+        html: saved.html,
+        content: saved.content,
+        by: effective.user ? (effective.user.displayName || effective.user.email) : 'Someone'
+      });
+      return sendJson(response, 200, saved);
     } catch (error) {
       if (error.statusCode === 409 && error.currentNote) {
         return sendJson(response, 409, {
@@ -620,6 +638,23 @@ async function handleApi(request, response, url) {
       }
       throw error;
     }
+  }
+
+  if (/^\/api\/items\/[^/]+\/presence$/.test(pathname) && request.method === 'POST') {
+    const itemKey = decodeURIComponent(pathname.split('/')[3]);
+    const body = await readJson(request);
+    eventBus.publish('note_presence', {
+      itemKey,
+      user: {
+        id: effective.user?.id || null,
+        email: effective.user?.email || 'Anonymous',
+        displayName: effective.user?.displayName || (effective.user?.email ? effective.user.email.split('@')[0] : 'Anonymous'),
+        color: body.color || '#3b82f6'
+      },
+      state: body.state || 'active',
+      timestamp: Date.now()
+    });
+    return sendJson(response, 200, { ok: true });
   }
 
   if (/^\/api\/items\/[^/]+\/note-versions$/.test(pathname) && request.method === 'GET') {

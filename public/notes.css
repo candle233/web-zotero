@@ -36,6 +36,32 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.notes-collaborators {
+  display: inline-flex;
+  align-items: center;
+  gap: -4px;
+}
+.notes-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 12px;
+  font-weight: bold;
+  border: 2px solid var(--panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  cursor: default;
+  transition: transform 0.15s ease;
+  user-select: none;
+}
+.notes-avatar:hover {
+  transform: scale(1.15) translateY(-2px);
+  z-index: 2;
+}
+
 .notes-status { color: var(--muted); font-size: 13px; }
 .notes-save {
   background: var(--accent);

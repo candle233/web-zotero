@@ -71,3 +71,34 @@ test('WebStore.mentions finds exact [[title]] links and ignores plain occurrence
   assert.deepEqual(store.mentions('Nothing'), []);
   store.database.close();
 });
+
+test('EventBus delivers note save and presence events for real-time collaboration', () => {
+  const bus = new EventBus();
+  const events = [];
+  bus.subscribe(evt => {
+    events.push(evt);
+    return true;
+  });
+
+  bus.publish('note_presence', {
+    itemKey: 'ITEM123',
+    user: { email: 'alice@example.com', displayName: 'Alice', color: '#2563eb' },
+    state: 'editing'
+  });
+
+  bus.publish('note', {
+    action: 'saved',
+    itemKey: 'ITEM123',
+    version: 2,
+    html: '<p>Updated content</p>',
+    by: 'Alice'
+  });
+
+  assert.equal(events.length, 2);
+  assert.equal(events[0].type, 'note_presence');
+  assert.equal(events[0].payload.user.displayName, 'Alice');
+  assert.equal(events[1].type, 'note');
+  assert.equal(events[1].payload.action, 'saved');
+  assert.equal(events[1].payload.version, 2);
+});
+
