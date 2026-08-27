@@ -4,22 +4,73 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
+const os = require('node:os');
+
+/**
+ * Walk standard OS-level Zotero data directories and return the first
+ * zotero.sqlite found, plus the sibling storage/ sibling that lives alongside it.
+ * Returns null when nothing plausible is found.
+ */
+function detectZoteroPaths() {
+  const home = os.homedir();
+  const candidates = [
+    // Standard Zotero 7 locations per platform
+    path.join(home, 'Zotero', 'zotero.sqlite'),         // Windows/macOS/Linux
+    path.join(home, '.local', 'share', 'Zotero', 'zotero.sqlite'), // Linux (flatpak/snap)
+  ];
+
+  for (const dbCandidate of candidates) {
+    if (fs.existsSync(dbCandidate)) {
+      // storage/ is a sibling of zotero.sqlite in standard installs
+      const storageCandidate = path.join(path.dirname(dbCandidate), 'storage');
+      if (fs.existsSync(storageCandidate)) {
+        return { databasePath: dbCandidate, storagePath: storageCandidate };
+      }
+      // zotero.sqlite found but storage sibling is missing — still usable
+      return { databasePath: dbCandidate, storagePath: null };
+    }
+  }
+  return null;
+}
 
 class ZoteroDatabase {
   constructor({
-    databasePath = process.env.ZOTERO_DATABASE || path.join(process.env.USERPROFILE || '', 'Zotero', 'zotero.sqlite'),
-    storagePath = process.env.ZOTERO_STORAGE || path.join(process.env.USERPROFILE || '', 'Zotero', 'storage')
+    databasePath = process.env.ZOTERO_DATABASE,
+    storagePath = process.env.ZOTERO_STORAGE
   } = {}) {
-    this.databasePath = databasePath;
-    this.storagePath = storagePath;
-    if (!fs.existsSync(databasePath)) {
+    // Zero-config auto-detection: if neither path is set, search standard locations.
+    const detected = (databasePath === undefined && storagePath === undefined)
+      ? detectZoteroPaths()
+      : null;
+
+    if (detected) {
+      this.databasePath = detected.databasePath;
+      this.storagePath  = detected.storagePath;
+      console.log(`Zotero auto-detected: DB=${this.databasePath}, Storage=${this.storagePath}`);
+    } else {
+      // Apply defaults only when the caller didn't pass a value.
+      const home = os.homedir();
+      this.databasePath = databasePath
+        ?? path.join(process.env.USERPROFILE || home, 'Zotero', 'zotero.sqlite');
+      this.storagePath  = storagePath
+        ?? (this.databasePath
+            ? path.join(path.dirname(this.databasePath), 'storage')
+            : path.join(process.env.USERPROFILE || home, 'Zotero', 'storage'));
+      if (databasePath === undefined && storagePath === undefined && !detected) {
+        console.warn(
+          'Zotero not auto-detected. Set ZOTERO_DATABASE and ZOTERO_STORAGE to point at your Zotero data.'
+        );
+      }
+    }
+
+    if (!fs.existsSync(this.databasePath)) {
       throw new Error(
-        `Zotero database not found at ${databasePath}.\n` +
+        `Zotero database not found at ${this.databasePath}.\n` +
         'Set ZOTERO_DATABASE to the path of zotero.sqlite and ZOTERO_STORAGE to its storage folder.\n' +
         'Close desktop Zotero first if the file is locked.'
       );
     }
-    this.database = new DatabaseSync(databasePath, { readOnly: true });
+    this.database = new DatabaseSync(this.databasePath, { readOnly: true });
     // Desktop Zotero holds write locks during sync; wait instead of failing with SQLITE_BUSY.
     this.database.exec('PRAGMA busy_timeout = 5000');
     this.itemCache = [];

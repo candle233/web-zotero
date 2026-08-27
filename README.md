@@ -31,20 +31,42 @@ See `ARCHITECTURE.md` for the full architecture blueprint (stack rationale, data
 
 ## Configuration
 
-Create `.env` in this folder:
+Zero-config: point `ZOTERO_STORAGE` at your Zotero storage folder and run `npm start`. PostgreSQL, AI, OCR, and S3 are auto-detected or gracefully skipped.
+
+Create `.env` in this folder (only `ZOTERO_STORAGE` is required):
 
 ```dotenv
-PORT=8420
-# Loopback by default. Set HOST=0.0.0.0 to reach the server from other
-# devices — and always configure WEB_PASSWORD or user accounts first.
-HOST=127.0.0.1
-ZOTERO_DATABASE=C:\Users\example\Zotero\zotero.sqlite
+# ── Required ───────────────────────────────────────────────────────────────
+# Path to your Zotero storage folder (auto-detected on Windows/macOS/Linux).
+# The sibling zotero.sqlite is found automatically when they are co-located.
 ZOTERO_STORAGE=C:\Users\example\Zotero\storage
-ZOTERO_PROFILE_ROOT=C:\Users\example\AppData\Roaming\Zotero\Zotero\Profiles\example.default
-WEB_PASSWORD=change-this-strong-password
+
+# ── Optional ───────────────────────────────────────────────────────────────
+PORT=8420
+HOST=127.0.0.1          # Set 0.0.0.0 for LAN access (set WEB_PASSWORD first)
+WEB_PASSWORD=change-me   # Protect the server when exposed beyond loopback
+
+# AI: leave blank for local extractive summarization. Point at Ollama or
+# any OpenAI-compatible endpoint. Embedding model is auto-selected (OpenAI
+# text-embedding-3-small or Ollama's default).
 OPENAI_API_KEY=
-OPENAI_MODEL=gpt-4o-mini
 AI_BASE_URL=https://api.openai.com/v1
+
+# PostgreSQL: auto-detected when running on localhost:5432. Override with:
+# DATABASE_URL=postgresql://user:pass@host:5432/web_zotero
+# Run db/schema.sql to create the schema. Without it the server falls back
+# to SQLite stores automatically.
+
+# Formula OCR (Pix2Text): install once, then it is auto-detected.
+# pip install pix2text && p2t serve -l en,ch_sim -H 127.0.0.1 -p 8503
+FORMULA_OCR_URL=http://127.0.0.1:8503/pix2text
+
+# S3-compatible storage for large attachments:
+# S3_ENDPOINT=http://127.0.0.1:9000
+# S3_BUCKET=web-zotero-attachments
+# S3_ACCESS_KEY_ID=minioadmin
+# S3_SECRET_ACCESS_KEY=minioadmin
+
 DATA_DIR=./data
 ```
 

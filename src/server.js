@@ -57,32 +57,17 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 // OpenAI-compatible endpoint; point at Ollama (e.g. http://127.0.0.1:11434/v1) for local models.
 const AI_BASE_URL = process.env.AI_BASE_URL || 'https://api.openai.com/v1';
 
+const { pickDatabaseUrl, maskConnectionString } = require('./detect-postgres');
+
 fs.mkdirSync(DATA_DIR, { recursive: true });
 const zoteroDatabase = new ZoteroDatabase();
 const searchIndex = new SearchIndex(DATA_DIR, zoteroDatabase);
-const webStore = process.env.DATABASE_URL
-  ? new PgWebStore(process.env.DATABASE_URL)
-  : new WebStore(DATA_DIR);
-const userStore = process.env.DATABASE_URL
-  ? new PgUserStore(process.env.DATABASE_URL)
-  : new UserStore(DATA_DIR);
-const annotationStore = process.env.DATABASE_URL
-  ? new PgWebAnnotationStore(process.env.DATABASE_URL)
-  : new WebAnnotationStore(DATA_DIR);
-const workspaceStore = process.env.DATABASE_URL
-  ? new PgWorkspaceStore(process.env.DATABASE_URL)
-  : null;
 const s3Storage = new S3Storage();
-const semanticIndex = process.env.DATABASE_URL
-  ? new PgSemanticIndex(process.env.DATABASE_URL, {
-      apiKey: OPENAI_API_KEY,
-      baseUrl: AI_BASE_URL,
-      model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small'
-    })
-  : new SemanticIndex(DATA_DIR, searchIndex);
 const eventBus = new EventBus();
-const health = new HealthMonitor({ zoteroDatabase, searchIndex, webStore, userStore, annotationStore });
-const offlineLibrary = new OfflineLibrary(DATA_DIR);
+const health = new HealthMonitor({ zoteroDatabase, searchIndex, s3Storage, aiBaseUrl: AI_BASE_URL, openAiApiKey: OPENAI_API_KEY, formulaOcrUrl: process.env.FORMULA_OCR_URL || 'http://127.0.0.1:8503/pix2text' });
+
+// Stores are initialised asynchronously inside main() once PG auto-detection runs.
+let webStore, userStore, annotationStore, workspaceStore, semanticIndex;
 
 const ROLE_RANK = { viewer: 0, editor: 1, owner: 2 };
 // POST endpoints that compute without mutating anything; viewers may call them.
@@ -1263,6 +1248,52 @@ async function handle(request, response) {
 
 async function main() {
   await zoteroDatabase.refreshItems();
+
+  // Auto-detect PostgreSQL unless DATABASE_URL is explicitly set.
+  // pg pool connects lazily, so we probe after instantiation to report the real state.
+  const { url: pgUrl } = await pickDatabaseUrl(process.env.DATABASE_URL);
+  if (pgUrl) {
+    try {
+      webStore = new PgWebStore(pgUrl);
+      userStore = new PgUserStore(pgUrl);
+      annotationStore = new PgWebAnnotationStore(pgUrl);
+      workspaceStore = new PgWorkspaceStore(pgUrl);
+      semanticIndex = new PgSemanticIndex(pgUrl, {
+        apiKey: OPENAI_API_KEY,
+        baseUrl: AI_BASE_URL,
+        model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small'
+      });
+      health._pgUrl = pgUrl;
+      // Probe immediately so the banner shows the real connection state.
+      const pgReachable = await health._probePostgres();
+      if (pgReachable) {
+        console.log(`Using PostgreSQL: ${maskConnectionString(pgUrl)}`);
+      } else {
+        console.warn(`PostgreSQL unreachable — ${maskConnectionString(pgUrl)}. Falling back to SQLite stores.`);
+        webStore = new WebStore(DATA_DIR);
+        userStore = new UserStore(DATA_DIR);
+        annotationStore = new WebAnnotationStore(DATA_DIR);
+        workspaceStore = null;
+        semanticIndex = new SemanticIndex(DATA_DIR, searchIndex);
+      }
+    } catch (err) {
+      console.warn(`PostgreSQL error — ${err.message}. Falling back to SQLite stores.`);
+      webStore = new WebStore(DATA_DIR);
+      userStore = new UserStore(DATA_DIR);
+      annotationStore = new WebAnnotationStore(DATA_DIR);
+      workspaceStore = null;
+      semanticIndex = new SemanticIndex(DATA_DIR, searchIndex);
+    }
+  } else {
+    webStore = new WebStore(DATA_DIR);
+    userStore = new UserStore(DATA_DIR);
+    annotationStore = new WebAnnotationStore(DATA_DIR);
+    workspaceStore = null;
+    semanticIndex = new SemanticIndex(DATA_DIR, searchIndex);
+  }
+  health._bindStores(webStore, userStore, annotationStore);
+  const offlineLibrary = new OfflineLibrary(DATA_DIR);
+
   const server = http.createServer(handle);
   // Keep serving after stray stream/promise errors: log loudly instead of dying.
   process.on('uncaughtException', error => console.error(`uncaughtException: ${error.stack || error}`));
@@ -1283,6 +1314,10 @@ async function main() {
     }
     console.log(`Library items: ${zoteroDatabase.items.length}; indexed documents: ${searchIndex.status().indexed}`);
     console.log(`Auth mode: ${mode.mode}${mode.mode === 'users' ? ` (${mode.users} users)` : ''}`);
+    console.log(`Database: ${pgUrl ? `PostgreSQL (${maskConnectionString(pgUrl)})` : 'SQLite (./data)'}`);
+    console.log(`  AI: ${OPENAI_API_KEY ? 'OpenAI' : AI_BASE_URL.startsWith('http://127.0.0.1') || AI_BASE_URL.startsWith('http://localhost') ? 'local OpenAI-compatible' : 'local extractive'}`);
+    console.log(`  OCR: ${process.env.FORMULA_OCR_URL ? 'enabled' : 'not running (pip install pix2text && p2t serve to enable)'}`);
+    console.log(`  S3: ${s3Storage.isConfigured() ? 'configured' : 'disabled'}`);
   });
   setImmediate(async () => {
     try {
