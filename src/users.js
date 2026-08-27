@@ -202,7 +202,7 @@ class UserStore {
     const now = Date.now();
     // Enforce session limit per user before inserting
     const existingSessions = this.database.prepare(`
-      SELECT token_hash FROM sessions WHERE user_id = ? ORDER BY created_at DESC
+      SELECT token_hash FROM sessions WHERE user_id = ? ORDER BY created_at DESC, token_hash ASC
     `).all(user.id);
     if (existingSessions.length >= MAX_SESSIONS_PER_USER) {
       const stale = existingSessions.slice(MAX_SESSIONS_PER_USER - 1);
