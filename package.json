@@ -12,7 +12,7 @@
   "scripts": {
     "start": "node src/server.js",
     "start:zero-config": "node src/server.js",
-    "test": "node --test tests/local-ai.test.js tests/search-snippet.test.js tests/sse-offline.test.js tests/formula-ocr.test.js tests/recommend.test.js tests/metadata.test.js tests/citation-service.test.js tests/users.test.js tests/annotations-store.test.js tests/notes-html.test.js tests/semantic.test.js tests/events.test.js tests/pg-stores.test.js tests/workspaces.test.js tests/s3-storage.test.js tests/semantic-pg.test.js tests/optimizations.test.js && node --test tests/coordinates.test.ts tests/outline-splitview.test.ts && tsc -p tsconfig.json",
+    "test": "node --test tests/local-ai.test.js tests/detect-postgres.test.js tests/search-snippet.test.js tests/sse-offline.test.js tests/formula-ocr.test.js tests/recommend.test.js tests/metadata.test.js tests/citation-service.test.js tests/users.test.js tests/annotations-store.test.js tests/notes-html.test.js tests/semantic.test.js tests/events.test.js tests/pg-stores.test.js tests/workspaces.test.js tests/s3-storage.test.js tests/semantic-pg.test.js tests/optimizations.test.js && node --test tests/coordinates.test.ts tests/outline-splitview.test.ts && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json",
     "build:annotator": "node scripts/build-annotator.js",
     "build:notes": "node scripts/build-notes.js",
