@@ -1,10 +1,9 @@
-'use strict';
-
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { PgWebStore } = require('../src/web-store-pg');
 const { PgWebAnnotationStore } = require('../src/annotations-store-pg');
 const { PgUserStore } = require('../src/users-pg');
+const { hashPasswordAsync, verifyPasswordAsync } = require('../src/users');
 
 const DATABASE_URL = (process.env.DATABASE_URL || '').trim();
 
@@ -121,4 +120,74 @@ test('PgWebStore & PgWebAnnotationStore round-trip when DATABASE_URL is set', { 
     await annotationStore.close();
     await userStore.close();
   }
+});
+
+
+test('PgUserStore full surface when DATABASE_URL is set', { skip: !DATABASE_URL }, async () => {
+  const userStore = new PgUserStore(DATABASE_URL);
+  const testEmail = `pg-user-${Date.now()}@example.com`;
+
+  try {
+    const user = await userStore.createUser({ email: testEmail, password: 'long-enough-1' });
+    assert.equal(user.email, testEmail);
+    assert.ok(['owner','editor'].includes(user.role), `role should be owner or editor, got ${user.role}`);
+    assert.ok((await userStore.count()) >= 1);
+    const listed = await userStore.listUsers();
+    assert.ok(listed.some(u => u.email === testEmail));
+
+    const authed = await userStore.authenticate(testEmail, 'long-enough-1');
+    assert.equal(authed.email, testEmail);
+    await assert.rejects(async () => userStore.authenticate(testEmail, 'wrong-password'),
+      error => error.statusCode === 401);
+
+    const issued = await userStore.issueToken(user);
+    assert.ok(issued);
+    const cp = await userStore.changePassword(user.id, 'long-enough-1', 'new-password-2');
+    assert.equal(cp.ok, true);
+    assert.equal(await userStore.resolveToken(issued), null);
+    const authed2 = await userStore.authenticate(testEmail, 'new-password-2');
+    assert.equal(authed2.id, user.id);
+
+    const newToken = await userStore.issueToken(user);
+    const { hashToken } = require('../src/users');
+    const sessions = await userStore.listSessions(user.id, hashToken(newToken));
+    assert.ok(sessions.length >= 1, true);
+    assert.equal(sessions.filter(s => s.current).length, 1, 'exactly one current session');
+
+    const victim = await userStore.issueToken(user);
+    const victimRef = (await userStore.listSessions(user.id)).find(s => !s.current).ref;
+    assert.ok(victimRef);
+    await userStore.revokeSession(user.id, victimRef);
+    assert.equal(await userStore.resolveToken(victim), null);
+
+    const updated = await userStore.updateUser(user.id, { displayName: 'Test User' });
+    assert.equal(updated.displayName, 'Test User');
+
+    const del = await userStore.deleteUser(user.id);
+    assert.equal(del.ok, true);
+    await assert.rejects(async () => userStore.authenticate(testEmail, 'new-password-2'),
+      error => error.statusCode === 401);
+  } finally {
+    await userStore.pool.query("DELETE FROM users WHERE email LIKE $1", [testEmail]).catch(() => {});
+    await userStore.close();
+  }
+});
+
+test('PgWebStore.getNote returns default for missing key', { skip: !DATABASE_URL }, async () => {
+  const webStore = new PgWebStore(DATABASE_URL);
+  try {
+    const result = await webStore.getNote(`MISSING_KEY_${Date.now()}`);
+    assert.ok(result.itemKey.startsWith('MISSING_KEY_'));
+    assert.equal(result.content, '');
+    assert.equal(result.html, null);
+    assert.equal(result.updatedAt, null);
+    assert.equal(result.version, 0);
+  } finally { await webStore.close(); }
+});
+
+test('hashPasswordAsync / verifyPasswordAsync are usable', async () => {
+  const hash = await hashPasswordAsync('hello-async-pw');
+  assert.ok(hash.startsWith('scrypt$'));
+  assert.equal(await verifyPasswordAsync('hello-async-pw', hash), true);
+  assert.equal(await verifyPasswordAsync('wrong', hash), false);
 });

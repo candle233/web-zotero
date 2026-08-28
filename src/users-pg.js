@@ -192,6 +192,8 @@ class PgUserStore {
     }
     const newHash = await hashPasswordAsync(newPassword);
     await this.pool.query('UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1', [Number(id), newHash]);
+    // Invalidate all existing sessions — the password rotation implies logout-everywhere.
+    await this.pool.query('DELETE FROM sessions WHERE user_id = $1', [Number(id)]);
     return { ok: true };
   }
 

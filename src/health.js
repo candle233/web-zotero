@@ -45,6 +45,8 @@ class HealthMonitor {
   /** Cheap liveness probe for one SQLite or PostgreSQL-backed store. */
   async _probeStore(store) {
     if (!store) return null; // not provided / not yet bound
+    // Return null for stores that have not been configured (no recognised backend).
+    if (!store.database && !store.pool) return null;
     try {
       if (store.database) store.database.prepare('SELECT 1').get();       // node:sqlite
       else if (store.pool) await store.pool.query('SELECT 1');
