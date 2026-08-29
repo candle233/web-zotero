@@ -1,0 +1,57 @@
+# Web Zotero systemd unit (Linux hosts)
+#
+# Install:
+#   sudo cp deploy/web-zotero.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now web-zotero
+#
+# Configure via the Environment= lines or an EnvironmentFile=.env
+# (see README.md for the full variable list).
+
+[Unit]
+Description=Web Zotero — remote web companion for a local Zotero library
+After=network.target
+# If you use PostgreSQL instead of the default SQLite web layer:
+# After=network.target postgresql.service
+# Requires=postgresql.service
+
+[Service]
+Type=simple
+# Adjust User/WorkingDirectory to your install location.
+User=wz
+Group=wz
+WorkingDirectory=/opt/web-zotero
+ExecStart=/usr/bin/node src/server.js
+Restart=on-failure
+RestartSec=5
+
+# Environment (or use EnvironmentFile=/opt/web-zotero/.env)
+Environment=PORT=8420
+Environment=HOST=127.0.0.1
+Environment=NODE_ENV=production
+# Required: point at the Zotero data directory (the server reads it read-only).
+# Environment=ZOTERO_STORAGE=/home/you/Zotero/storage
+# Environment=ZOTERO_DATABASE=/home/you/Zotero/zotero.sqlite
+# Recommended: protect the server before exposing it.
+# Environment=WEB_PASSWORD=change-me
+# Optional: PostgreSQL for the multi-user web layer.
+# Environment=DATABASE_URL=postgresql://user:pass@127.0.0.1:5432/web_zotero
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The Zotero data dir is read-only; the web data dir must be writable.
+ReadWritePaths=/opt/web-zotero/data
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=web-zotero
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+node_modules/
+data/
+tests/
+docs/
+.git/
+.gitignore
+*.md
+.env
+extensions.json
+playwright-report/
+test-results/
