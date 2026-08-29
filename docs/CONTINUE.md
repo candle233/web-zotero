@@ -24,12 +24,9 @@
 
 ---
 
-## 待实现功能清单（按优先级顺序，逐个做）
+## 待实现功能清单
 
-### 5. R9b 完整版：真 CRDT 协同编辑
-- 现状：乐观锁 + 版本历史（`note_versions` 表）已上线
-- 引入 Yjs + y-websocket（或基于现有 SSE 的 y-sweet 风格 awareness），笔记多人光标/实时合并
-- 这是最大的单项，先做技术验证 spike 再全量
+（无——路线图 R1–R9b 全部完成。可选增强：Yjs 真 CRDT 替代现有 SSE 协同，价值有限。）
 
 ---
 
@@ -39,7 +36,7 @@
 3. `git add -A && git commit`（信息用英文祈使句，说清 what+why）→ `git push origin master`
 4. 更新本文件：把完成项移到下方"已完成"并写提交号
 
-## 已完成（截至 2026-08-26）
+## 已完成（截至 2026-08-28）
 - **R1–R9a 全部**：基础检索、PDF 阅读器、TipTap 笔记、标注系统、引用格式化、多用户体系（commit `2db20d9` 前完成）。
 - **R7b 阶段二：Web 层存储全面迁移 PostgreSQL**（commit `433fa91`）：
   - 实现 `src/web-store-pg.js`（`PgWebStore`）与 `src/annotations-store-pg.js`（`PgWebAnnotationStore`），全面支持 `web_notes`（行级悲观锁+乐观锁并发冲突 409 检测+版本归档）、`reading_progress_web`、`formula_history`、`ai_summaries`、`web_items`、`web_annotations`。
@@ -69,6 +66,17 @@
   - 边读边写分屏模式（Split-View）：PDF 阅读器顶部工具栏增加 `📖 笔记分屏` 切换，右侧无缝嵌入 TipTap 富文本笔记编辑器（`src/pdf/EmbeddedNoteEditor.tsx`）。
   - 一键引用到笔记（Quote to Note）：选中文本的悬浮工具栏和侧边栏批注卡片均配备 `📌 引用` 按钮，自动格式化并插入引用块与带原页面锚点属性的页码链接（`<a href="#page=N" data-page="N">p. N</a>`）；在笔记中点击页码锚点即可双向瞬时跳转到 PDF 对应页面。
   - 新增测试套件 `tests/outline-splitview.test.ts`（大纲树形节点计数、目的地解析与引用 HTML 格式化全量通过）。
+- **零配置启动**（commit `213a4b5`）：
+  - `src/detect-postgres.js`：PG 探测 + 自动 DSN，1.5s 超时。
+  - `src/zotero-db.js`：自动发现 `~/Zotero/zotero.sqlite` 与旁 `storage/`；找不到时打印警告并继续启动。
+  - `src/server.js`：存储构造移入 `main()` 以支持 await 探测；PG 不可达时静默降级 SQLite；启动横幅显示 Database/AI/OCR/S3 状态。
+  - `src/health.js`：`/api/health` 新增 `services.{postgres,ocr,ai,s3}` 与 AI provider 提示。
+- **功能批量实现**（commits `b6ea905`→`26d7392`）：
+  - 批量导入文献、标签浏览、排序选项、搜索直达页码、Cookie 认证、公式识别历史、界面中文化+主题、阅读统计、摘要缓存、Ollama 接入、登录表单+键盘导航。
+- **LSA worker 线程化 + 健康检查完善 + SSE 断线补发 + 离线副本 DELETE + 账号自助改密**。
+- **测试覆盖**（commits `56b6668`→`4bf001c`，110 单测 + 12 TS 测试 = 122 pass）：
+  - 11 个新测试文件覆盖此前零覆盖的模块（detect-postgres / health / ask / citation / offline / search-detect-page / zotero-db / plugins / annotation-export / web-store / e2e-startup）。
+  - 顺手修复两个真实 bug：`_probeStore` 边界 + `users-pg.js changePassword` 不撤销旧 session。
 
 
 
