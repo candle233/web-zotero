@@ -458,6 +458,9 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
                     key={annotation.id}
                     className={annotation.id === selectedId ? 'wz-selected-item' : ''}
                     onClick={() => locateAnnotation(annotation)}
+                    onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') locateAnnotation(annotation); }}
+                    tabIndex={0}
+                    role="button"
                   >
                     <div className="wz-sidebar-item-head">
                       <span className="wz-chip" style={{ backgroundColor: annotation.color }}>
@@ -742,6 +745,14 @@ function OutlineTree({ nodes, onSelect, level = 0 }: OutlineTreeProps) {
               onClick={() => {
                 if (node.pageIndex !== undefined) onSelect(node.pageIndex);
               }}
+              onKeyDown={event => {
+                if (node.pageIndex !== undefined && (event.key === 'Enter' || event.key === ' ')) {
+                  event.preventDefault();
+                  onSelect(node.pageIndex);
+                }
+              }}
+              tabIndex={node.pageIndex !== undefined ? 0 : undefined}
+              role={node.pageIndex !== undefined ? 'button' : undefined}
             >
               {hasChildren ? (
                 <button

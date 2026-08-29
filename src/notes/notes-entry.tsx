@@ -319,6 +319,19 @@ function NotesApp() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [saveNote]);
 
+  // Autosave: check every 12s; save when the editor content differs from the
+  // last saved snapshot (dirty tracking via lastSavedHtmlRef). The version /
+  // 409 flow already guards against concurrent overwrites.
+  React.useEffect(() => {
+    if (!editor) return;
+    const timer = setInterval(() => {
+      if (!saving && editor.getHTML() !== lastSavedHtmlRef.current) {
+        void saveNote();
+      }
+    }, 12000);
+    return () => clearInterval(timer);
+  }, [editor, saving, saveNote]);
+
   if (!itemKey) {
     return <p className="notes-error">Missing ?item=KEY query parameter.</p>;
   }

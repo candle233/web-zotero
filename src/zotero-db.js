@@ -74,9 +74,26 @@ class ZoteroDatabase {
     // Desktop Zotero holds write locks during sync; wait instead of failing with SQLITE_BUSY.
     this.database.exec('PRAGMA busy_timeout = 5000');
     this.itemCache = [];
+    // Refresh gating: the 3-query library scan is expensive (100ms+ on large
+    // libraries) and Zotero's own data rarely changes more often than every
+    // few seconds. Skip the scan when nothing changed and the cache is fresh.
+    this._lastRefreshAt = 0;
+    this._itemByKey = new Map();
   }
 
-  async refreshItems() {
+  /** Minimum seconds between full library scans. */
+  static REFRESH_TTL_SECONDS = 5;
+
+  async refreshItems({ force = false } = {}) {
+    // Skip the scan when the DB file has not changed and the cache is fresh.
+    let mtimeMs = 0;
+    try { mtimeMs = fs.statSync(this.databasePath).mtimeMs; } catch {}
+    const fresh = (Date.now() - this._lastRefreshAt) / 1000 < ZoteroDatabase.REFRESH_TTL_SECONDS;
+    if (!force && fresh && mtimeMs === this._lastMtimeMs && this.itemCache.length) {
+      return this.itemCache;
+    }
+    this._lastMtimeMs = mtimeMs;
+    this._lastRefreshAt = Date.now();
     const rows = this.database.prepare(`
       SELECT i.itemID, i.key, i.dateAdded, i.dateModified,
              t.typeName,
@@ -133,7 +150,13 @@ class ZoteroDatabase {
       dateAdded: row.dateAdded,
       dateModified: row.dateModified
     }));
+    this._rebuildKeyIndex();
     return this.itemCache;
+  }
+
+  /** Rebuilds the key→item Map used by getItemByKey (O(1) instead of O(n) .find). */
+  _rebuildKeyIndex() {
+    this._itemByKey = new Map(this.itemCache.map(item => [item.key, item]));
   }
 
   get items() {
@@ -141,7 +164,7 @@ class ZoteroDatabase {
   }
 
   getItemByKey(key) {
-    return this.items.find(item => item.key === key);
+    return this._itemByKey.get(key) || null;
   }
 
   /** One query for all item ids in a collection — avoids per-item lookups when filtering lists. */

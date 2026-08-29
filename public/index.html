@@ -47,7 +47,7 @@
           <button id="searchButton" class="ghost" data-i18n="refresh">刷新</button>
           <button id="reindexButton" data-i18n="reindex">重建索引</button>
         </div>
-        <div id="status" class="status" data-i18n="loadingLibrary">正在加载文献库…</div>
+        <div id="status" class="status" data-i18n="loadingLibrary" aria-live="polite">正在加载文献库…</div>
         <div class="pref-row">
           <button id="themeToggle" class="ghost" title="切换深浅主题">🌓</button>
           <button id="langToggle" class="ghost" title="Switch language">中/EN</button>
@@ -61,7 +61,7 @@
     </aside>
     <main class="content">
       <div class="toolbar">
-        <button id="backButton" class="ghost" hidden>←</button>
+        <button id="backButton" class="ghost" hidden aria-label="Back to library">←</button>
         <h2 id="detailTitle">Library</h2>
         <button id="openAnnotatorButton" class="ghost" hidden data-i18n="annotatorBtn" title="在 PDF.js 标注器中打开（所有浏览器可用）">✏️ 标注器</button>
         <button id="newTabButton" class="ghost" hidden data-i18n="newTab" title="在新标签页打开 PDF">↗ 新标签</button>
@@ -109,8 +109,8 @@
       </div>
     </main>
   </div>
-  <div id="toast" class="toast"></div>
-  <div id="loginPanel" class="login-overlay" hidden>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="loginPanel" class="login-overlay" hidden role="dialog" aria-modal="true" aria-label="Sign in">
     <form id="loginForm" class="login-card">
       <h3>Sign in</h3>
       <label id="loginEmailRow">Email

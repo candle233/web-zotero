@@ -230,12 +230,25 @@ async function resolvePrincipal(request, url) {
   return null;
 }
 
-const COOKIE_ATTRS = 'Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000';
-function issueAuthCookie(response, token) {
-  response.setHeader('set-cookie', `wz_token=${encodeURIComponent(token)}; ${COOKIE_ATTRS}`);
+// The Secure attribute is added when the request arrived over https (directly
+// or via a TLS-terminating proxy that sets X-Forwarded-Proto) or when the
+// operator declares a https PUBLIC_URL. Over plain http it must stay off —
+// browsers drop Secure cookies on insecure origins and login would break.
+const PUBLIC_URL = process.env.PUBLIC_URL || '';
+function cookieAttrs(secure) {
+  const base = 'Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000';
+  return secure ? `${base}; Secure` : base;
 }
-function clearAuthCookie(response) {
-  response.setHeader('set-cookie', `wz_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+function isSecureRequest(request) {
+  if (PUBLIC_URL.startsWith('https://')) return true;
+  const proto = String(request.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  return proto === 'https';
+}
+function issueAuthCookie(response, token, secure = false) {
+  response.setHeader('set-cookie', `wz_token=${encodeURIComponent(token)}; ${cookieAttrs(secure)}`);
+}
+function clearAuthCookie(response, secure = false) {
+  response.setHeader('set-cookie', `wz_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`);
 }
 
 function sendJson(response, status, payload) {
@@ -1029,7 +1042,7 @@ async function handleApi(request, response, url) {
         const user = await userStore.authenticate(body.email, body.password);
         clearLoginFailures(ip);
         const token = await userStore.issueToken(user);
-        issueAuthCookie(response, token);
+        issueAuthCookie(response, token, isSecureRequest(request));
         return sendJson(response, 200, { token, user });
       } catch (error) {
         recordLoginFailure(ip);
@@ -1044,13 +1057,13 @@ async function handleApi(request, response, url) {
       return sendJson(response, 401, { error: 'Invalid password', auth: true, mode: mode.mode });
     }
     clearLoginFailures(ip);
-    issueAuthCookie(response, WEB_PASSWORD);
+    issueAuthCookie(response, WEB_PASSWORD, isSecureRequest(request));
     return sendJson(response, 200, { ok: true, token: WEB_PASSWORD, user: { role: 'owner' } });
   }
 
   // Revokes the caller's session token (user mode); no-op for legacy/open.
   if (pathname === '/api/auth/logout' && request.method === 'POST') {
-    clearAuthCookie(response);
+    clearAuthCookie(response, isSecureRequest(request));
     if (principal?.kind === 'user' && principal.token) await userStore.revokeToken(principal.token);
     return sendJson(response, 200, { ok: true });
   }
