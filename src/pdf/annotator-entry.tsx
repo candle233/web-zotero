@@ -294,6 +294,13 @@ function AnnotatorApp() {
           httpHeaders={token ? { authorization: `Bearer ${token}` } : undefined}
           workerUrl="/vendor/pdf.worker.min.mjs"
           initialPage={Number(params.get('page')) || undefined}
+        onProgressReport={(percent) => {
+          void fetch(`/api/items/${encodeURIComponent(itemKey)}/progress`, {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({ percent })
+          }).catch(() => {});
+        }}
           annotations={annotations}
           onCreate={annotation => {
             persist([...annotations, annotation]);

@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const http = require('node:http');
 const os = require('node:os');
+const zlib = require('node:zlib');
 const path = require('node:path');
 const { URL } = require('node:url');
 const { ZoteroDatabase } = require('./zotero-db');
@@ -70,6 +71,32 @@ const health = new HealthMonitor({ zoteroDatabase, searchIndex, s3Storage, aiBas
 let webStore, userStore, annotationStore, workspaceStore, semanticIndex;
 
 const ROLE_RANK = { viewer: 0, editor: 1, owner: 2 };
+
+// Sliding-window rate limit for endpoints with external cost (AI tokens,
+// Crossref/arXiv quota, OCR compute, full reindex). Per-IP, best effort.
+const costlyEndpointLimits = new Map([
+  ['/api/ai/summarize', { windowMs: 3600000, max: 30 }],
+  ['/api/ai/ask', { windowMs: 3600000, max: 60 }],
+  ['/api/metadata/resolve', { windowMs: 3600000, max: 60 }],
+  ['/api/formula-ocr', { windowMs: 3600000, max: 60 }],
+  ['/api/index/rebuild', { windowMs: 3600000, max: 5 }]
+]);
+const costlyEndpointHits = new Map(); // ip:path -> [timestamps]
+
+function costlyEndpointExceeded(path, ip) {
+  const limit = costlyEndpointLimits.get(path);
+  if (!limit) return false;
+  const key = `${ip}:${path}`;
+  const now = Date.now();
+  const hits = (costlyEndpointHits.get(key) || []).filter(t => t > now - limit.windowMs);
+  if (hits.length >= limit.max) {
+    costlyEndpointHits.set(key, hits);
+    return true;
+  }
+  hits.push(now);
+  costlyEndpointHits.set(key, hits);
+  return false;
+}
 // POST endpoints that compute without mutating anything; viewers may call them.
 const READ_ONLY_POST_ROUTES = new Set([
   '/api/auth', '/api/metadata/resolve', '/api/citations/format', '/api/ai/summarize', '/api/ai/ask',
@@ -259,11 +286,34 @@ const SECURITY_HEADERS = {
   ].join('; ')
 };
 
-async function serveFile(response, relativePath, contentType, maxAge = 3600) {
+// Compressed in-memory copies for large static bundles (annotator.js is 1MB+).
+// Keyed by relative path; invalidated never — bundles change only on rebuild,
+// which bumps the content but not the path, so the process should restart anyway.
+const gzipCache = new Map();
+
+async function serveFile(response, relativePath, contentType, maxAge = 3600, request = null) {
   const filePath = path.join(PUBLIC_DIR, relativePath);
   if (!filePath.startsWith(PUBLIC_DIR + path.sep)) return sendJson(response, 403, { error: 'Forbidden' });
   try {
     const data = await fsp.readFile(filePath);
+    const acceptsGzip = request && String(request.headers['accept-encoding'] || '').includes('gzip');
+    const worthCompressing = data.length > 1024 && /text|javascript|json/.test(contentType);
+    if (acceptsGzip && worthCompressing) {
+      let gz = gzipCache.get(relativePath);
+      if (!gz || gz.length === 0) {
+        gz = zlib.gzipSync(data, { level: 6 });
+        gzipCache.set(relativePath, gz);
+      }
+      response.writeHead(200, {
+        'content-type': contentType,
+        'content-length': gz.length,
+        'content-encoding': 'gzip',
+        'cache-control': `public, max-age=${maxAge}`,
+        vary: 'Accept-Encoding',
+        ...SECURITY_HEADERS
+      });
+      return response.end(gz);
+    }
     response.writeHead(200, {
       'content-type': contentType,
       'content-length': data.length,
@@ -397,6 +447,9 @@ async function handleApi(request, response, url) {
     return sendJson(response, 401, { error: 'Unauthorized', auth: true, mode: (await authMode()).mode });
   }
   const effective = principal || { kind: 'anonymous', user: null, role: 'viewer' };
+  if (costlyEndpointExceeded(pathname, clientIp(request))) {
+    return sendJson(response, 429, { error: 'Too many requests for this endpoint. Try again later.' });
+  }
   if (request.method !== 'GET' && !READ_ONLY_POST_ROUTES.has(pathname)
       && ROLE_RANK[effective.role] < ROLE_RANK.editor) {
     return sendJson(response, 403, { error: `Your role (${effective.role}) is read-only.` });
@@ -746,7 +799,8 @@ async function handleApi(request, response, url) {
     const attachmentKey = body.attachmentKey || null;
     const filename = body.filename || 'attachment.pdf';
     const contentType = body.contentType || 'application/pdf';
-    const expiresIn = Number(body.expiresIn) || 900;
+    // Clamp to a sane range: 1 minute .. 24 hours.
+    const expiresIn = Math.min(86400, Math.max(60, Number(body.expiresIn) || 900));
 
     const fileKey = s3Storage.generateFileKey(itemKey, attachmentKey, filename);
     try {
@@ -829,8 +883,24 @@ async function handleApi(request, response, url) {
 
   if (pathname === '/api/ai/summarize' && request.method === 'POST') {
     const body = await readJson(request);
-    const detail = typeof body.itemKey === 'string' ? zoteroDatabase.itemDetail(body.itemKey) : null;
+    const detail = typeof body.itemKey === 'string'
+      ? (zoteroDatabase.itemDetail(body.itemKey) || importedDetail(body.itemKey))
+      : null;
     if (!detail) return sendJson(response, 404, { error: 'Item not found' });
+    // Imported entries have no local PDF; summarize from stored metadata.
+    if (detail.imported) {
+      const refreshImported = url.searchParams.get('refresh') === '1';
+      if (!refreshImported) {
+        const cached = await webStore.getCachedSummary(detail.key);
+        if (cached) return sendJson(response, 200, { ...cached, cached: true });
+      }
+      const metaText = [detail.title, detail.fields.abstractNote, detail.fields.publicationTitle]
+        .filter(Boolean).join('. ');
+      if (!metaText) return sendJson(response, 503, { error: 'This imported item has no abstract to summarize.' });
+      const localMeta = localSummary({ title: detail.title, authors: normalizeCreators(detail.creators), text: metaText });
+      await webStore.cacheSummary(detail.key, 'local', localMeta);
+      return sendJson(response, 200, localMeta);
+    }
     const attachment = detail.attachments.find(file => file.exists);
     if (!attachment) return sendJson(response, 409, { error: 'This item has no available PDF.' });
     const refresh = url.searchParams.get('refresh') === '1';
@@ -1236,7 +1306,7 @@ async function handle(request, response) {
       '/vendor/pdf.worker.min.mjs': ['vendor/pdf.worker.min.mjs', 'text/javascript; charset=utf-8', 0]
     };
     const route = routes[url.pathname];
-    if (route) return await serveFile(response, ...route);
+    if (route) return await serveFile(response, ...route, request);
     return sendJson(response, 404, { error: 'Not found' });
   } catch (error) {
     const status = error.statusCode || 500;
@@ -1261,7 +1331,8 @@ async function main() {
       semanticIndex = new PgSemanticIndex(pgUrl, {
         apiKey: OPENAI_API_KEY,
         baseUrl: AI_BASE_URL,
-        model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small'
+        model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small',
+        searchIndex
       });
       health._pgUrl = pgUrl;
       // Probe immediately so the banner shows the real connection state.

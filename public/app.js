@@ -16,7 +16,7 @@ const I18N = {
     mentionedIn: '被提及于', zoteroNotes: 'Zotero 笔记', desktopAnn: '桌面端标注',
     availablePdfs: '可用 PDF', filesPanel: '文件', noPdf: '没有可用的本地 PDF 附件。',
     related: '相关论文', citationPreview: '引用预览', bibliography: '参考文献表', inText: '文中引用',
-    copy: '复制', aiReading: 'AI 精读', extract: '提取全文', annotatorBtn: '✏️ 标注器',
+    copy: '复制', aiReading: 'AI 精读', annotatorBtn: '✏️ 标注器',
     newTab: '↗ 新标签打开', loadMoreRemain: n => `加载更多（剩 ${n} 条）`,
     noMatching: '没有匹配的条目。', itemsCount: n => `${n} 条`,
     addToLibrary: n => `➕ 加入文献库（${n} 条）`, importedToast: n => `已导入 ${n} 条`,
@@ -38,7 +38,7 @@ const I18N = {
     noteSaved: '笔记已保存', exportAnnotations: '导出标注',
     availablePdfs: 'Available PDFs', filesPanel: 'Files', noPdf: 'No available local PDF attachment.',
     related: 'Related papers', citationPreview: 'Citation preview', bibliography: 'Bibliography', inText: 'In-text',
-    copy: 'Copy', aiReading: 'AI reading', extract: 'Extract', annotatorBtn: '✏️ Annotator',
+    copy: 'Copy', aiReading: 'AI reading', annotatorBtn: '✏️ Annotator',
     newTab: '↗ New tab', loadMoreRemain: n => `Load more (${n} remaining)`,
     noMatching: 'No matching items.', itemsCount: n => `${n} items`,
     addToLibrary: n => `➕ Add to library (${n})`, importedToast: n => `Imported ${n}`,
@@ -925,7 +925,6 @@ elements.reindexButton.addEventListener('click', async () => {
 elements.backButton.addEventListener('click', () => { state.view='detail'; showView('detail'); });
 elements.closeSearch.addEventListener('click', () => { elements.searchInput.value=''; state.searchMode=false; elements.searchResults.classList.remove('active'); });
 elements.summarizeButton.addEventListener('click', summarize);
-elements.extractTextButton.addEventListener('click', extractText);
 elements.lookupButton.addEventListener('click', runLookup);
 elements.lookupInput.addEventListener('keydown', event => { if (event.key === 'Enter') runLookup(); });
 elements.closeLookup.addEventListener('click', () => { state.view = 'detail'; showView('detail'); });
@@ -1229,6 +1228,15 @@ async function loadReadingStats() {
   } catch {
     body.replaceChildren(Object.assign(document.createElement('div'), { className: 'muted-count', textContent: '—' }));
   }
+}
+
+// Register the service worker for offline support (PWA).
+if ('serviceWorker' in navigator && location.protocol === 'http:' || 'serviceWorker' in navigator && location.protocol === 'https:') {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(err => {
+      console.warn('Service worker registration failed (offline mode unavailable):', err.message);
+    });
+  });
 }
 
 (async function init() {

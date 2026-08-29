@@ -69,6 +69,7 @@ class PgSemanticIndex {
     this.baseUrl = (config.baseUrl || process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
     this.model = config.model || process.env.EMBEDDING_MODEL || 'text-embedding-3-small';
     this.dimensions = Number(config.dimensions) || 64;
+    this.searchIndex = config.searchIndex || null;
     this.hasPgVector = false;
     this.ready = false;
     this.building = false;
@@ -179,6 +180,47 @@ class PgSemanticIndex {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Re-indexes every document in the FTS corpus through indexDocument.
+   * API-compatible with the local SemanticIndex.rebuildAsync used by
+   * /api/index/rebuild. Runs inline (embeddings are per-chunk API calls);
+   * the local LSA variant offloads to a worker thread instead.
+   */
+  async rebuildAsync({ force = false } = {}) {
+    const fts = this.searchIndex;
+    if (!fts || !fts.database) return { started: true, ready: false, reason: 'FTS index unavailable' };
+    const documents = fts.database.prepare(
+      'SELECT item_key, attachment_key, title, text FROM documents'
+    ).all();
+    let indexed = 0;
+    let skipped = 0;
+    for (const doc of documents) {
+      try {
+        if (!force && (await this.hasEmbedding(doc.item_key))) { skipped += 1; continue; }
+        await this.indexDocument(doc.item_key, doc.attachment_key, doc.title || '', String(doc.text || '').slice(0, 600000));
+        indexed += 1;
+      } catch (error) {
+        console.error(`Semantic re-index failed for ${doc.item_key}: ${error.message}`);
+        skipped += 1;
+      }
+    }
+    const status = await this.status();
+    return {
+      started: true, ready: status.ready,
+      chunks: status.chunks, items: status.items,
+      terms: status.chunks, dimensions: status.dimensions,
+      indexed, skipped
+    };
+  }
+
+  async hasEmbedding(itemKey) {
+    const { rows } = await this.pool.query(
+      'SELECT 1 FROM document_embeddings WHERE item_key = $1 LIMIT 1',
+      [String(itemKey)]
+    );
+    return rows.length > 0;
   }
 
   async search(queryText, limit = 30) {

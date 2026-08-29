@@ -20,6 +20,8 @@ export interface PdfAnnotationViewerProps {
   onDocumentLoaded?: (info: { pages: number }) => void;
   /** 1-based page to scroll to once the document and its pages are mounted. */
   initialPage?: number;
+  /** Called (debounced) when the reader scroll position changes. percent is 0..100. */
+  onProgressReport?: (percent: number) => void;
   /** Loads saved formula recognitions for the reuse list in the OCR panel. */
   formulaHistory?: () => Promise<{ formulas: { id: number; latex: string; createdAt?: string }[] }>;
   /**
@@ -258,6 +260,27 @@ export function PdfAnnotationViewer(props: PdfAnnotationViewerProps) {
     });
     return () => cancelAnimationFrame(frame);
   }, [pdfDoc, pageLimit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Report reading progress (debounced 1.5s) as the user scrolls the reader.
+  React.useEffect(() => {
+    const container = scrollRef.current;
+    if (!container || !props.onProgressReport) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onScroll = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        const max = container.scrollHeight - container.clientHeight;
+        if (max <= 0) return;
+        const percent = Math.min(100, Math.max(0, (container.scrollTop / max) * 100));
+        props.onProgressReport?.(Math.round(percent * 10) / 10);
+      }, 1500);
+    };
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+      if (timer) clearTimeout(timer);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const locateAnnotation = useCallback((annotation: PdfAnnotation) => {    setSelectedId(annotation.id);
     setFlashId(annotation.id);
