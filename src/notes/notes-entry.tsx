@@ -219,10 +219,10 @@ function NotesApp() {
   }, [editor, itemKey, authHeaders]);
 
   // Real-time SSE Live Collaboration & Remote Save Event Subscription
+  // Auth travels in the wz_token cookie (server.js resolvePrincipal).
   React.useEffect(() => {
     if (!itemKey) return;
-    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : '';
-    const es = new EventSource(`/api/events${tokenParam}`);
+    const es = new EventSource('/api/events');
 
     es.addEventListener('note_presence', (evt: MessageEvent) => {
       try {

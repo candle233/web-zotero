@@ -737,6 +737,44 @@ async function handleApi(request, response, url) {
     return response.end(body);
   }
 
+  // Web-layer annotation export (md/csv) — same formatters as the desktop export.
+  if (/^\/api\/items\/[^/]+\/web-annotations\.(md|csv|json)$/.test(pathname) && request.method === 'GET') {
+    const match = pathname.match(/^\/api\/items\/([^/]+)\/web-annotations\.(md|csv|json)$/);
+    const itemKey = decodeURIComponent(match[1]);
+    const format = match[2];
+    const annotations = annotationStore.list({ itemKey });
+    if (!annotations.length) return sendJson(response, 200, { annotations: [], message: 'No web annotations for this item.' });
+    let body;
+    let contentType;
+    let filename;
+    if (format === 'csv') {
+      body = annotationsToCsv(annotations.map(a => ({
+        type: a.type, text: a.quoteText, comment: a.commentText,
+        color: a.color, pageLabel: a.pageLabel, authorName: a.authorEmail
+      })));
+      contentType = 'text/csv; charset=utf-8';
+      filename = `${itemKey}-web-annotations.csv`;
+    } else if (format === 'json') {
+      body = JSON.stringify({ itemKey, annotations }, null, 2);
+      contentType = 'application/json; charset=utf-8';
+      filename = `${itemKey}-web-annotations.json`;
+    } else {
+      body = annotationsToMarkdown(annotations.map(a => ({
+        type: a.type, text: a.quoteText, comment: a.commentText,
+        color: a.color, pageLabel: a.pageLabel, authorName: a.authorEmail
+      })));
+      contentType = 'text/markdown; charset=utf-8';
+      filename = `${itemKey}-web-annotations.md`;
+    }
+    response.writeHead(200, {
+      'content-type': contentType,
+      'content-disposition': `attachment; filename="${filename}"`,
+      'x-content-type-options': 'nosniff',
+      'cache-control': 'no-store'
+    });
+    return response.end(body);
+  }
+
   if (/^\/api\/items\/[^/]+\/related$/.test(pathname) && request.method === 'GET') {
     await zoteroDatabase.refreshItems();
     const key = decodeURIComponent(pathname.split('/')[3]);
